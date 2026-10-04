@@ -1,0 +1,592 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Discussion dynamics</title>
+<style>
+:root{--bg:#fafaf8;--fg:#1d1d1b;--mut:#6b6b66;--line:#e2e1db;--card:#fff;--acc:#2f5fd0;--sel:#eaf0fd}
+@media(prefers-color-scheme:dark){:root{--bg:#161614;--fg:#ecebe6;--mut:#9a9992;--line:#2f2f2b;--card:#1f1f1c;--acc:#7da2ff;--sel:#212a40}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:14px/1.5 system-ui,-apple-system,sans-serif}
+header{position:sticky;top:0;z-index:2;background:var(--bg);display:flex;gap:10px;align-items:center;padding:10px 16px;border-bottom:1px solid var(--line);flex-wrap:wrap}
+h1{font-size:15px;margin:0 8px 0 0}
+select,button{font:inherit;color:inherit;background:var(--card);border:1px solid var(--line);border-radius:6px;padding:4px 10px}
+main{max-width:1200px;margin:0 auto;padding:12px 24px 60px}
+h2{font-size:16px;margin:28px 0 6px}
+h3{font-size:14px;margin:16px 0 4px}
+.note{color:var(--mut);font-size:12px}
+.grid4{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px}
+.gridp{display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:10px}
+.panel{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:6px}
+.warn{background:var(--sel);border-radius:8px;padding:8px 12px;font-size:13px;margin:6px 0}
+@media(max-width:800px){.grid4{grid-template-columns:repeat(2,minmax(0,1fr))}}
+</style>
+</head>
+<body>
+<header>
+  <h1>Discussion dynamics</h1>
+  <select id="run"></select>
+  <select id="cond"><option value="forum">forum</option><option value="control">control</option><option value="pair">pairs</option></select>
+  <select id="pair" title="pair shown in the MCA and theory panels"></select>
+  <button id="reload">Reload</button>
+</header>
+<main id="main"><div class="note">Loading…</div></main>
+<script src="/clusters.js"></script>
+<script>
+const $=s=>document.querySelector(s);
+const esc=s=>String(s??'').replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+const short=m=>String(m||'').split('/').pop();
+const ORDER=['claude-opus-5.5','claude-haiku-4.5','gpt-6.1-sol','gpt-6-luna','grok-4.7','grok-4.3','qwen3.8-max-prime','qwen3.8-flash','deepseek-v4-pro-0813','deepseek-v4.1-flash','glm-5.3-prime','glm-5.3-flash'];
+const rank=m=>{const i=ORDER.indexOf(short(m));return i<0?99:i};
+const LAB={anthropic:'Anthropic',openai:'OpenAI','x-ai':'xAI',qwen:'Alibaba',deepseek:'DeepSeek','z-ai':'Zhipu'};
+const LAB_ORDER=['anthropic','openai','x-ai','qwen','deepseek','z-ai'];
+const DARK=matchMedia('(prefers-color-scheme: dark)').matches;
+// Brand-associated color per lab (Claude terracotta, ChatGPT green, Grok black, Qwen pink, DeepSeek blue,
+// Zhipu olive: no strong brand color). Validated for contrast and CVD; tier fill and labels add secondary encoding.
+const LAB_COLORS=DARK?['#D27350','#20AE80','#ecebe6','#A82E63','#4F80EC','#7F6F10']:['#D97757','#10A37F','#1d1d1b','#C2185B','#2F6FE4','#8A6D00'];
+const ROUND_SHADES=DARK?['#184f95','#256abf','#5598e7','#9ec5f4']:['#b7d3f6','#6da7ec','#2a78d6','#104281'];  // sequential: R0 light -> R3 dark
+const prov=m=>m.split('/')[0], labColor=m=>LAB_COLORS[LAB_ORDER.indexOf(prov(m))]??'#898781', cheap=m=>rank(m)%2===1;
+const ROUNDS=[0,1,2,3];
+let ITEMS={},REC=[],J={},ST={},WANT=new Map(),state={run:null,cond:'forum',pair:null,rubric:'neutral',fitFrom:0,fitScope:'all'};
+
+const stanceOf=r=>{const s=r&&ST[r._ref];return s&&s.length?s.reduce((a,x)=>a+x.stance,0)/s.length:null};
+function verdict(r,key){
+  if(!r) return null;
+  if(key.endsWith('|ALL')){
+    const judge=key.slice(0,-4),parts=RADAR_AXES.map(([k,s])=>[s,verdict(r,`${judge}|${k}`)]).filter(([,v])=>v);
+    if(!WANT.has(judge)) WANT.set(judge,RADAR_AXES.filter(([k])=>Object.values(J).some(js=>js.some(j=>j.key===`${judge}|${k}`))).length);
+    if(parts.length<2||parts.length<WANT.get(judge)) return null;
+    return {frac:parts.flatMap(([,v])=>v.frac),score:parts.reduce((s,[,v])=>s+v.score,0),criteria:parts.flatMap(([s,v])=>v.criteria.map(c=>`[${s}] ${c}`)),weights:parts.flatMap(([,v])=>v.weights)};
+  }
+  const runs=(J[r._ref]||[]).filter(j=>j.key===key&&j.valid);
+  if(!runs.length) return null;
+  const n=runs[0].applies.length,w=runs[0].weights;
+  return {frac:[...Array(n)].map((_,i)=>runs.reduce((s,j)=>s+j.applies[i],0)/runs.length),
+    score:runs.reduce((s,j)=>s+j.applies.reduce((t,a,i)=>t+a*w[i],0),0)/runs.length,criteria:runs[0].criteria,weights:w};
+}
+const JUDGE='openai/gpt-6.1-sol';
+const pct=(r,rub)=>{const v=verdict(r,`${JUDGE}|${rub}`);if(!v)return null;return 100*v.score/v.weights.filter(x=>x>0).reduce((a,b)=>a+b,0)};
+
+// A run's records plus the round 0 it reused from an earlier screen run.
+function runRecords(run){
+  const own=REC.filter(r=>r.run_id===run),dilemma=own[0]?.dilemma,key=r=>`${r.model_requested}|${r.agent}`;
+  const have=new Set(own.filter(r=>r.condition==='round0').map(key));
+  const src=own.find(r=>r.round0_from)?.round0_from||[...new Set(REC.filter(r=>r.condition==='round0'&&r.dilemma===dilemma&&r.run_id<run).map(r=>r.run_id))].sort().pop();
+  return own.concat(REC.filter(r=>r.run_id===src&&r.run_id!==run&&r.condition==='round0'&&!have.has(key(r))));
+}
+// Agents of one group, each with private records for rounds 0..3. Round 0 is matched by which
+// round-0 response appears in the agent's round-1 prompt (handles the self-pair's two samples).
+// Memoized per records array so every panel shares the same agent objects.
+const AGENTS_CACHE=new WeakMap();
+function agentsOf(recs,group){
+  const cache=AGENTS_CACHE.get(recs)||AGENTS_CACHE.set(recs,new Map()).get(recs);
+  if(!cache.has(group))cache.set(group,buildAgents(recs,group));
+  return cache.get(group).slice();
+}
+function buildAgents(recs,group){
+  const r0s=recs.filter(r=>r.condition==='round0'),by={};
+  recs.filter(r=>r.group===group&&r.kind==='private').forEach(r=>{(by[r.agent]=by[r.agent]||{agent:r.agent,model:r.model_requested,group,rec:{}}).rec[r.round]=r});
+  return Object.values(by).map(a=>{
+    const p1=a.rec[1]?.messages?.[1]?.content||'';
+    a.rec[0]=r0s.find(r=>r.model_requested===a.model&&p1.includes(r.reply))||r0s.find(r=>r.model_requested===a.model);
+    return a;
+  }).sort((x,y)=>rank(x.model)-rank(y.model)||x.agent.localeCompare(y.agent));
+}
+const labelOf=(a,all)=>all.filter(b=>b.model===a.model).length>1?`${short(a.model)} (${a.agent})`:short(a.model);
+
+// ---------- stance over rounds ----------
+// Static version of the movie: same rows (one per agent or pair), one column per round on the -5..+5 line,
+// plus a mean +- SD row for single-agent rows (forum / control).
+// rows: [{label, dots: [{color, hollow, vals: [stance per round], name, agent}]}]
+// diag(agent, k) -> {edges: [{from: agent, cites, shared}], html} explains the move from round k-1 to k:
+// hovering a dot draws edges from its sources (in the round k-1 column) and fills the detail panel; click pins it.
+function stanceRows(host,rows,{diag}={}){
+  const T=themeColors(),W=900,L=170,gap=28,cw=(W-L-10-gap*3)/4,rowH=22,Tp=34;
+  const dots=rows.flatMap(r=>r.dots),withMean=dots.length>2&&rows.every(r=>r.dots.length===1),n=rows.length+(withMean?1:0),H=Tp+n*rowH+30;
+  const x0=k=>L+k*(cw+gap),sx=(k,v)=>x0(k)+(v+5)/10*cw;
+  const svg=mk(host,'svg',{width:'100%',viewBox:`0 0 ${W} ${H}`,role:'img','aria-label':'Stance by round, one row per agent'});
+  svg.style.maxWidth=W+'px';
+  const yB=Tp+n*rowH-8;
+  ROUNDS.forEach(k=>{
+    mk(svg,'text',{x:x0(k)+cw/2,y:14,'text-anchor':'middle','font-size':12,'font-weight':600,fill:T.ink},`Round ${k}`);
+    mk(svg,'line',{x1:sx(k,0),x2:sx(k,0),y1:Tp-12,y2:yB,stroke:T.grid,'stroke-dasharray':'3 3'});
+    [-5,0,5].forEach(v=>{mk(svg,'line',{x1:sx(k,v),x2:sx(k,v),y1:yB,y2:yB+5,stroke:T.mut});
+      mk(svg,'text',{x:sx(k,v),y:yB+17,'text-anchor':'middle','font-size':10,fill:T.mut},v>0?'+'+v:v)});
+  });
+  rows.forEach((r,i)=>{const y=Tp+i*rowH;
+    mk(svg,'text',{x:L-10,y:y+4,'text-anchor':'end','font-size':11,fill:T.ink},trunc(r.label,26));
+    ROUNDS.forEach(k=>mk(svg,'line',{x1:x0(k),x2:x0(k)+cw,y1:y,y2:y,stroke:T.grid,'stroke-opacity':0.5}));
+  });
+  const overlay=mk(svg,'g',{}),circles=[];  // edges sit under the dots
+  rows.forEach((r,i)=>{const y=Tp+i*rowH;
+    ROUNDS.forEach(k=>r.dots.forEach((d,j)=>{const v=d.vals[k];if(v==null)return;
+      const cx=sx(k,v),cy=y+(r.dots.length>1?(j?3:-3):0);
+      const c=mk(svg,'circle',{cx,cy,r:d.hollow?4.5:5,fill:d.hollow?T.bg:d.color,stroke:d.color,'stroke-width':2,style:diag?'cursor:pointer':''});
+      if(d.agent)(d.agent._pos=d.agent._pos||{})[k]=[cx,cy];
+      circles.push([c,d,k]);
+      hover(c,`${d.name} · R${k}: stance ${v>0?'+':''}${Math.round(v*10)/10}${diag?' · details below':''}`);
+      if(diag){c.addEventListener('mouseenter',()=>{if(!pinned)focus(d,k)});
+        c.addEventListener('click',()=>{const same=pinned&&pinned[0]===d&&pinned[1]===k;pinned=same?null:[d,k];focus(d,k);if(same)clear()})}
+    }));
+  });
+  if(withMean){const y=Tp+rows.length*rowH;
+    mk(svg,'text',{x:L-10,y:y+4,'text-anchor':'end','font-size':11,'font-weight':600,fill:T.mut},'mean ± SD');
+    ROUNDS.forEach(k=>{const v=dots.map(d=>d.vals[k]).filter(x=>x!=null);if(!v.length)return;
+      const m=v.reduce((a,b)=>a+b,0)/v.length,sd=Math.sqrt(v.reduce((a,x)=>a+(x-m)**2,0)/v.length);
+      const bar=mk(svg,'line',{x1:sx(k,Math.max(-5,m-sd)),x2:sx(k,Math.min(5,m+sd)),y1:y,y2:y,stroke:T.mut,'stroke-width':6,'stroke-opacity':0.35,'stroke-linecap':'round'});
+      const c=mk(svg,'circle',{cx:sx(k,m),cy:y,r:4,fill:T.mut});
+      [bar,c].forEach(e=>hover(e,`R${k}: mean ${m>0?'+':''}${m.toFixed(2)}, SD ${sd.toFixed(2)} (n=${v.length})`))});
+  }
+  if(!diag)return;
+  const panel=document.createElement('div');panel.className='panel';panel.style.cssText='max-width:900px;margin:6px 0;padding:10px 14px;font-size:13px;min-height:60px';host.appendChild(panel);
+  const idle='<span class="note">Hover a dot in rounds 1–3 to see what moved that agent since the previous round: lines run from its sources (round k−1 column) to it. Solid line = named it in its private response (thicker = more mentions); dotted = only shares newly adopted arguments (darker = more shared). Click a dot to pin it and open its private response (any round, including round 0).</span>';
+  panel.innerHTML=idle;
+  let pinned=null;
+  const clear=()=>{overlay.innerHTML='';circles.forEach(([c])=>c.style.opacity='');panel.innerHTML=idle};
+  function focus(d,k){
+    overlay.innerHTML='';
+    if(!d.agent){circles.forEach(([c])=>c.style.opacity='');panel.innerHTML=`<b>${esc(d.name)}</b>`;return}
+    const res=diag(d.agent,k),on=new Set([d.agent,...res.edges.map(e=>e.from)]),to=d.agent._pos?.[k];
+    const maxSh=Math.max(1,...res.edges.map(e=>e.shared));
+    res.edges.forEach(e=>{const fr=e.from._pos?.[k-1];if(!fr||!to)return;
+      mk(overlay,'line',{x1:fr[0],y1:fr[1],x2:to[0],y2:to[1],stroke:labColor(e.from.model),'stroke-width':e.cites?1.5+1.2*e.cites:1.5,'stroke-dasharray':e.cites?'none':'2 3','stroke-opacity':e.cites?0.8:0.1+0.6*e.shared/maxSh})});
+    circles.forEach(([c,dd,kk])=>c.style.opacity=(dd.agent===d.agent&&(kk===k||kk===k-1))||(on.has(dd.agent)&&kk===k-1)?'':'0.18');
+    panel.innerHTML=(pinned?'<div class="note" style="float:right">pinned · click the dot again to unpin</div>':'')+res.html;
+    if(pinned){const now=panel.querySelector('details.resp-now');if(now)now.open=true}
+  }
+}
+// Mentions of other agents in a text: "Agent 3", "Agents 3, 5 and 7" -> ['Agent 3', ...]
+const mentionsIn=t=>[...String(t).matchAll(/\bAgents? (\d+)((?:(?:, and |, | and | & )\d+)*)/g)].flatMap(m=>[m[1],...(m[2].match(/\d+/g)||[])]).map(n=>'Agent '+n);
+const sideOf=v=>v==null?null:v<0?'A':v>0?'B':'0';
+const fmtS=v=>v==null?'–':(v>0?'+':'')+(Math.round(v*10)/10);
+// What could have moved agent a between private round k-1 and k (forum or pair group):
+//  read   - public posts of phase k (written between the two private rounds), in posting order, with their stance
+//  cites  - which peers its round-k private response names, with the sentence
+//  shared - neutral-rubric criteria it newly meets at k (absent at k-1), and which peers already met them at k-1
+// These are descriptive traces, not causal estimates (one run; shared arguments may be independent).
+function transition(recs,a,k){
+  const peers=a.group==='control'?[]:agentsOf(recs,a.group).filter(p=>p!==a&&p.agent!==a.agent),byLabel=Object.fromEntries(peers.map(p=>[p.agent,p]));
+  const read=recs.filter(r=>r.group===a.group&&r.kind==='public'&&r.round===k).sort((x,y)=>x.time-y.time);
+  const text=a.rec[k]?.reply||'',cites=new Map(),snip=new Map();
+  text.split(/(?<=[.!?])\s+/).forEach(sen=>[...new Set(mentionsIn(sen))].forEach(l=>{const p=byLabel[l];if(!p)return;
+    cites.set(p,(cites.get(p)||0)+mentionsIn(sen).filter(x=>x===l).length);(snip.get(p)||snip.set(p,[]).get(p)).push(sen)}));
+  const K=`${JUDGE}|neutral`,now=verdict(a.rec[k],K),prev=verdict(a.rec[k-1],K),shared=new Map();
+  const newCrit=now&&prev?now.frac.map((f,i)=>[i,f]).filter(([i,f])=>f>=0.5&&prev.frac[i]<0.5).map(([i])=>({text:now.criteria[i],w:now.weights[i],
+    holders:peers.filter(p=>(verdict(p.rec[k-1],K)?.frac[i]??0)>=0.5)})):null;
+  (newCrit||[]).forEach(c=>c.holders.forEach(p=>shared.set(p,(shared.get(p)||0)+1)));
+  const edges=peers.filter(p=>cites.has(p)||shared.has(p)).map(p=>({from:p,cites:cites.get(p)||0,shared:shared.get(p)||0}));
+  return {peers,read,cites,snip,newCrit,shared,edges,before:stanceOf(a.rec[k-1]),after:stanceOf(a.rec[k])};
+}
+// The agent's private responses at rounds k-1 and k, collapsible; "Agent N" mentions show the model name.
+function responsesHTML(recs,a,k){
+  const byLabel=Object.fromEntries((a.group==='control'?[]:agentsOf(recs,a.group)).map(p=>[p.agent,p]));
+  const sub=t=>esc(t).replace(/\bAgents? (\d+)((?:(?:, and |, | and | &amp; )\d+)*)/g,(m,n0,rest)=>[n0,...(rest.match(/\d+/g)||[])].map(n=>byLabel['Agent '+n]?`<span style="background:var(--sel);border-radius:3px;padding:0 2px" title="originally &quot;Agent ${n}&quot;">${esc(short(byLabel['Agent '+n].model))}</span>`:`Agent ${n}`).join(', '));
+  const block=(kk,cls)=>{const r=a.rec[kk];if(!r)return'';
+    return `<details class="${cls}" style="margin-top:8px;border:1px dashed var(--line);border-radius:8px;padding:6px 10px"><summary style="cursor:pointer"><b>Private response, round ${kk}</b> <span class="note">stance ${fmtS(stanceOf(r))} · ${r.reply.split(/\s+/).length} words${kk===k?'':' · before this move'}</span></summary>
+      <div style="white-space:pre-wrap;max-height:420px;overflow:auto;margin-top:6px;line-height:1.5">${sub(r.reply)}</div></details>`};
+  return `<div style="margin-top:10px">${block(k,'resp-now')}${k>0?block(k-1,'resp-prev'):''}<div class="note" style="margin-top:4px">Click the dot to pin, then expand. Model names replace "Agent N" mentions (hover for the original).</div></div>`;
+}
+function transitionHTML(recs,a,k){
+  if(k===0)return `<div style="font-size:14px">${a.model?`<b>${esc(short(a.model))}</b>`:''} <b>R0 ${fmtS(stanceOf(a.rec[0]))}</b> <span class="note">independent starting answer (no peers seen yet)</span></div>`+responsesHTML(recs,a,0);
+  const t=transition(recs,a,k),dotH=m=>`<span style="display:inline-block;width:9px;height:9px;border-radius:50%;border:2px solid ${labColor(m)};background:${cheap(m)?'transparent':labColor(m)};vertical-align:-1px"></span>`;
+  const nm=p=>`${dotH(p.model)} ${esc(short(p.model))}`,byLabel=Object.fromEntries(t.peers.map(p=>[p.agent,p]));
+  const subst=sen=>esc(trunc(sen,260)).replace(/\bAgents? (\d+)((?:(?:, and |, | and | &amp; )\d+)*)/g,(m,n0,rest)=>[n0,...(rest.match(/\d+/g)||[])].map(n=>byLabel['Agent '+n]?`<b>${esc(short(byLabel['Agent '+n].model))}</b>`:`Agent ${n}`).join(', '));
+  const d=t.after!=null&&t.before!=null?t.after-t.before:null;
+  let h=`<div style="font-size:14px;margin-bottom:6px">${nm(a)} <b>R${k-1} ${fmtS(t.before)} → R${k} ${fmtS(t.after)}</b> <span class="note">(${d==null?'':d===0?'no change':d>0?`moved ${fmtS(d)} toward B`:`moved ${fmtS(d)} toward A`})</span></div>`;
+  if(!t.read.length&&!t.peers.length) return h+'<div class="note">Control: no peers; the agent only re-read its own previous responses.</div>'+responsesHTML(recs,a,k);
+  const others=t.read.filter(r=>r.agent!==a.agent),ps=others.map(stanceOf).filter(v=>v!=null),mean=ps.length?ps.reduce((x,y)=>x+y,0)/ps.length:null;
+  const cnt=sd=>ps.filter(v=>sideOf(v)===sd).length;
+  h+=`<div style="margin:8px 0 2px"><b>Read in public phase ${k}</b> <span class="note">(posts in writing order; post stance; ✎ = named in its R${k} response; ⇄ n = shares n of its new arguments)</span></div>
+    <div class="note" style="margin-bottom:4px">Peer posts: ${cnt('A')} A-leaning · ${cnt('0')} neutral · ${cnt('B')} B-leaning; mean ${fmtS(mean)} vs its own R${k-1} ${fmtS(t.before)}.</div>
+    <div style="display:flex;flex-wrap:wrap;gap:4px 14px">${t.read.map((r,i)=>{const p=byLabel[r.agent],own=r.agent===a.agent;
+      return `<span>${i+1}. ${own?`<i>own post</i>`:p?nm(p):esc(r.agent)} <span class="note">${fmtS(stanceOf(r))}</span>${p&&t.cites.has(p)?' ✎':''}${p&&t.shared.get(p)?` ⇄${t.shared.get(p)}`:''}</span>`}).join('')}</div>`;
+  h+=`<div style="margin:10px 0 2px"><b>Named in its round-${k} private response</b></div>`;
+  const quotes=[...new Set([...t.snip.values()].flat())];
+  h+=t.cites.size?`<div style="display:flex;flex-wrap:wrap;gap:4px 14px">${[...t.cites].sort((x,y)=>y[1]-x[1]).map(([p,n])=>`<span>${nm(p)} <span class="note">R${k-1} ${fmtS(stanceOf(p.rec[k-1]))} · ${n}×</span></span>`).join('')}</div>`+
+    quotes.slice(0,4).map(q=>`<div class="note" style="margin:4px 0 0 16px">“${subst(q)}”</div>`).join('')+(quotes.length>4?`<div class="note" style="margin-left:16px">+${quotes.length-4} more</div>`:''):'<div class="note">No peer named.</div>';
+  h+=`<div style="margin:10px 0 2px"><b>Arguments newly met at R${k}</b> <span class="note">(neutral rubric; dots = peers who already met it at R${k-1})</span></div>`;
+  h+=t.newCrit==null?'<div class="note">Rubric judgments missing for this transition.</div>':t.newCrit.length?t.newCrit.map(c=>`<div style="margin:2px 0"><span class="note">${c.w>0?'+':''}${c.w}</span> ${esc(c.text)} ${c.holders.map(p=>`<span title="${esc(short(p.model))}">${dotH(p.model)}</span>`).join(' ')||'<span class="note">(no peer had it)</span>'}</div>`).join(''):'<div class="note">None.</div>';
+  return h+responsesHTML(recs,a,k);
+}
+// Side-to-side summary: for each transition, how agents grouped by their R(k-1) side moved, and whether the
+// peers they named / shared new arguments with sat on the A or B side at R(k-1).
+function sideTable(host,recs,agents){
+  const T=['A','0','B'],lab={A:'A side (<0)','0':'neutral (0)',B:'B side (>0)'};
+  let h=`<table style="border-collapse:collapse;font-size:12px;margin:6px 0;max-width:900px;width:100%"><thead><tr style="text-align:left;color:var(--mut)">
+    <th style="padding:3px 8px">transition</th><th>agents at R(k−1)</th><th>n</th><th>mean change</th><th>crossed to other side</th><th>named peers on A / 0 / B side</th><th>new args shared with A / 0 / B peers</th></tr></thead><tbody>`;
+  [1,2,3].forEach(k=>T.forEach(sd=>{const g=agents.filter(a=>sideOf(stanceOf(a.rec[k-1]))===sd);if(!g.length)return;
+    const tr=g.map(a=>transition(recs,a,k)),ch=tr.filter(t=>t.after!=null&&t.before!=null).map(t=>t.after-t.before);
+    const crossed=tr.filter(t=>sd!=='0'&&sideOf(t.after)&&sideOf(t.after)!=='0'&&sideOf(t.after)!==sd).length;
+    // count, and count per available peer on that side (sides differ in size)
+    const by=(f)=>T.map(s2=>{const c=tr.reduce((acc,t)=>acc+[...f(t)].filter(([p])=>sideOf(stanceOf(p.rec[k-1]))===s2).reduce((x,[,n])=>x+n,0),0),
+      m=tr.reduce((acc,t)=>acc+t.peers.filter(p=>sideOf(stanceOf(p.rec[k-1]))===s2).length,0);return m?`${c} <span class="note">(${(c/m).toFixed(1)})</span>`:'–'}).join(' / ');
+    h+=`<tr style="border-top:1px solid var(--line)"><td style="padding:3px 8px">R${k-1}→R${k}</td><td>${lab[sd]}</td><td>${g.length}</td><td>${ch.length?fmtS(ch.reduce((x,y)=>x+y,0)/ch.length):'–'}</td><td>${sd==='0'?'–':crossed}</td><td>${by(t=>t.cites)}</td><td>${by(t=>t.shared)}</td></tr>`}));
+  host.insertAdjacentHTML('beforeend',h+'</tbody></table>');
+}
+// Stance movie: one row per agent (or per pair) on the -5..+5 line; dots glide between rounds.
+// rows: [{label, dots: [{color, hollow, vals: [stance per round], name}]}]
+function stanceMovie(host,rows){
+  const T=themeColors(),W=640,L=170,R=W-20,rowH=22,Tp=30,H=Tp+rows.length*rowH+44,sx=v=>L+(v+5)/10*(R-L);
+  const box=document.createElement('div');box.className='panel';box.style.cssText='max-width:900px;margin:8px 0';host.appendChild(box);
+  box.innerHTML=`<div style="display:flex;gap:10px;align-items:center;padding:2px 4px 4px"><button type="button">▶ Play</button>
+    <input type="range" min="0" max="3" step="0.01" value="0" style="flex:1"><span class="note" style="min-width:64px;text-align:right">Round 0</span></div>`;
+  const [btn,slider,lab]=[box.querySelector('button'),box.querySelector('input'),box.querySelector('span')];
+  const svg=mk(box,'svg',{width:'100%',viewBox:`0 0 ${W} ${H}`,role:'img','aria-label':'Animated stance by round'});
+  mk(svg,'line',{x1:sx(0),x2:sx(0),y1:Tp-8,y2:H-36,stroke:T.grid,'stroke-dasharray':'3 3'});
+  for(let v=-5;v<=5;v++){mk(svg,'line',{x1:sx(v),x2:sx(v),y1:H-38,y2:H-32,stroke:T.mut});mk(svg,'text',{x:sx(v),y:H-20,'text-anchor':'middle','font-size':10,fill:T.mut},v>0?'+'+v:v)}
+  mk(svg,'text',{x:L,y:H-4,'font-size':11,'font-weight':600,fill:T.ink},'← A');mk(svg,'text',{x:R,y:H-4,'text-anchor':'end','font-size':11,'font-weight':600,fill:T.ink},'B →');
+  const els=[];
+  rows.forEach((r,i)=>{const y=Tp+i*rowH;
+    mk(svg,'line',{x1:L,x2:R,y1:y,y2:y,stroke:T.grid,'stroke-opacity':0.5});
+    mk(svg,'text',{x:L-10,y:y+4,'text-anchor':'end','font-size':11,fill:T.ink},trunc(r.label,26));
+    r.dots.forEach((d,j)=>{const c=mk(svg,'circle',{cy:y+(r.dots.length>1?(j?3:-3):0),r:d.hollow?4.5:5,fill:d.hollow?T.bg:d.color,stroke:d.color,'stroke-width':2});
+      hover(c,()=>`${d.name}: stance ${fmt(d.vals,+slider.value)}`);els.push([c,d])});
+  });
+  const at=(vals,t)=>{const k=Math.floor(t),f=t-k,a=vals[k],b=vals[Math.min(3,k+1)];if(a==null)return b??null;if(b==null||f===0)return a;return a+(b-a)*f};
+  const fmt=(vals,t)=>{const v=at(vals,t);return v==null?'–':(v>0?'+':'')+(Math.round(v*10)/10)};
+  const show=t=>{els.forEach(([c,d])=>{const v=at(d.vals,t);c.style.display=v==null?'none':'';if(v!=null)c.setAttribute('cx',sx(v))});
+    lab.textContent=Number.isInteger(t)?`Round ${t}`:`Round ${Math.floor(t)}→${Math.floor(t)+1}`;slider.value=t};
+  let timer=null,start=0,from=0;const SEG=1400,HOLD=500;
+  const stop=()=>{clearInterval(timer);timer=null;btn.textContent='▶ Play'};
+  const tick=()=>{const el=performance.now()-start,per=SEG+HOLD,seg=Math.floor(el/per),inSeg=el-seg*per;
+    const t=Math.min(3,from+seg+Math.min(1,Math.max(0,(inSeg-HOLD)/SEG)));show(Math.round(t*100)/100);if(t>=3)stop()};
+  btn.onclick=()=>{if(timer){stop();return}from=+slider.value>=3?0:Math.floor(+slider.value);start=performance.now();btn.textContent='❚❚ Pause';timer=setInterval(tick,30)};
+  slider.oninput=()=>{stop();show(+slider.value)};
+  show(0);
+}
+// Dispersion per round: SD across agents (control, forum) and mean |partner difference| (pairs).
+function dispersionChart(host,recs){
+  const T=themeColors(),w=640,h=230,L=44,R=w-130,Tp=14,B=h-30;
+  const sd=v=>{const m=v.reduce((a,b)=>a+b,0)/v.length;return Math.sqrt(v.reduce((a,x)=>a+(x-m)**2,0)/v.length)};
+  const series=[];
+  ['control','forum'].forEach(c=>{const ag=agentsOf(recs,c);if(ag.length)series.push([c==='forum'?'forum: SD across agents':'control: SD across agents',ROUNDS.map(k=>{const v=ag.map(a=>stanceOf(a.rec[k])).filter(x=>x!=null);return v.length>1?sd(v):null}),c==='forum'?T.on:T.mut,'none'])});
+  const pairs=[...new Set(recs.filter(r=>r.condition==='pair').map(r=>r.group))];
+  if(pairs.length) series.push(['pairs: mean |partner gap|',ROUNDS.map(k=>{const g=pairs.map(p=>{const ag=agentsOf(recs,p).map(a=>stanceOf(a.rec[k]));return ag.length===2&&ag.every(x=>x!=null)?Math.abs(ag[0]-ag[1]):null}).filter(x=>x!=null);return g.length?g.reduce((a,b)=>a+b,0)/g.length:null}),T.ink,'5 3']);
+  const ymax=Math.max(1,...series.flatMap(s=>s[1]).filter(x=>x!=null))*1.1;
+  const sx=k=>L+k/3*(R-L),sy=v=>B-v/ymax*(B-Tp);
+  const svg=mk(host,'svg',{width:'100%',viewBox:`0 0 ${w} ${h}`,role:'img','aria-label':'Stance dispersion by round'});
+  svg.style.maxWidth='760px';
+  for(let v=0;v<=ymax;v+=1){mk(svg,'line',{x1:L,x2:R,y1:sy(v),y2:sy(v),stroke:T.grid});mk(svg,'text',{x:L-6,y:sy(v)+4,'text-anchor':'end','font-size':11,fill:T.mut},v)}
+  ROUNDS.forEach(k=>mk(svg,'text',{x:sx(k),y:B+18,'text-anchor':'middle','font-size':11,fill:T.mut},`R${k}`));
+  series.forEach(([name,vals,col,dash])=>{
+    const pts=ROUNDS.filter(k=>vals[k]!=null).map(k=>[sx(k),sy(vals[k]),vals[k],k]);
+    mk(svg,'polyline',{points:pts.map(p=>p[0]+','+p[1]).join(' '),fill:'none',stroke:col,'stroke-width':2.5,'stroke-dasharray':dash});
+    pts.forEach(p=>{const c=mk(svg,'circle',{cx:p[0],cy:p[1],r:4,fill:col});hover(c,`${name} · R${p[3]}: ${p[2].toFixed(2)}`)});
+    const last=pts[pts.length-1];if(last)mk(svg,'text',{x:last[0]+8,y:last[1]+4,'font-size':11,fill:T.ink},`${name.split(':')[0]} ${last[2].toFixed(2)}`);
+  });
+}
+
+// ---------- trajectory panels (MCA and theory PCA) ----------
+// series: [{label, color, hollow, pts: [[x,y] | null per round]}]; arrows: optional [[label, x, y]] loadings.
+// Draws a movie panel (play/pause + scrubber, positions interpolated between rounds) above one static panel per round.
+function trajectoryPanels(host,series,{arrows,rounds=ROUNDS}={}){
+  const r0=rounds[0],rN=rounds[rounds.length-1];
+  const T=themeColors(),all=series.flatMap(s=>rounds.map(k=>s.pts[k])).filter(Boolean).concat(arrows?arrows.map(a=>[a[1],a[2]]):[]);
+  if(!all.length){host.insertAdjacentHTML('beforeend','<p class="note">No judged responses for this selection yet.</p>');return}
+  const xs=all.map(p=>p[0]),ys=all.map(p=>p[1]),pad=0.08;
+  let [mnx,mxx,mny,mxy]=[Math.min(...xs),Math.max(...xs),Math.min(...ys),Math.max(...ys)];
+  const dx=(mxx-mnx||1)*pad,dy=(mxy-mny||1)*pad;mnx-=dx;mxx+=dx;mny-=dy;mxy+=dy;
+  const frame=(svg,W,H,Tp)=>{const L=10,R=W-10,B=H-10,sx=v=>L+(v-mnx)/(mxx-mnx)*(R-L),sy=v=>B-(v-mny)/(mxy-mny)*(B-Tp);
+    if(mnx<0&&mxx>0)mk(svg,'line',{x1:sx(0),x2:sx(0),y1:Tp,y2:B,stroke:T.grid});
+    if(mny<0&&mxy>0)mk(svg,'line',{x1:L,x2:R,y1:sy(0),y2:sy(0),stroke:T.grid});
+    return [sx,sy]};
+  const drawArrows=(svg,sx,sy)=>arrows&&arrows.forEach(([lab,x,y])=>{mk(svg,'line',{x1:sx(0),y1:sy(0),x2:sx(x),y2:sy(y),stroke:T.mut,'stroke-width':1.2});
+    mk(svg,'text',{x:sx(x)+(x>=0?3:-3),y:sy(y)+(y>=0?-3:10),'text-anchor':x>=0?'start':'end','font-size':10,fill:T.mut},lab)});
+  const dot=(svg,s,x,y,r)=>{const c=mk(svg,'circle',{cx:x,cy:y,r:s.hollow?r-0.5:r,fill:s.hollow?T.bg:s.color,stroke:s.color,'stroke-width':2});return c};
+
+  // Movie: one larger panel, dots glide between rounds.
+  const movie=document.createElement('div');movie.className='panel';movie.style.cssText='max-width:560px;margin:6px 0 10px';host.appendChild(movie);
+  movie.innerHTML=`<div style="display:flex;gap:10px;align-items:center;padding:2px 4px 4px"><button type="button">▶ Play</button>
+    <input type="range" min="${r0}" max="${rN}" step="0.01" value="${r0}" style="flex:1"><span class="note" style="min-width:64px;text-align:right">Round ${r0}</span></div>`;
+  const [btn,slider,lab]=[movie.querySelector('button'),movie.querySelector('input'),movie.querySelector('span')];
+  const MW=520,MH=380,msvg=mk(movie,'svg',{width:'100%',viewBox:`0 0 ${MW} ${MH}`,role:'img','aria-label':'Animated positions across rounds'});
+  const [msx,msy]=frame(msvg,MW,MH,10);drawArrows(msvg,msx,msy);
+  const mdots=series.map(s=>{const c=dot(msvg,s,0,0,6);hover(c,s.label);return c});
+  const at=(s,t)=>{const k=Math.floor(t),f=t-k,a=s.pts[k],b=s.pts[Math.min(rN,k+1)];
+    if(!a&&!b)return null;if(!a)return f>0.5?b:null;if(!b||f===0)return a;return [a[0]+(b[0]-a[0])*f,a[1]+(b[1]-a[1])*f]};
+  const show=t=>{series.forEach((s,i)=>{const p=at(s,t),c=mdots[i];if(!p){c.style.display='none';return}c.style.display='';c.setAttribute('cx',msx(p[0]));c.setAttribute('cy',msy(p[1]))});
+    lab.textContent=Number.isInteger(t)?`Round ${t}`:`Round ${Math.floor(t)}→${Math.floor(t)+1}`;slider.value=t};
+  // Clock-driven timer (not requestAnimationFrame) so playback still advances when the page is throttled.
+  let timer=null,start=0,from=0;
+  const SEG=1400,HOLD=500;  // ms gliding between rounds, ms held on each round
+  const stop=()=>{clearInterval(timer);timer=null;btn.textContent='▶ Play'};
+  const tick=()=>{const el=performance.now()-start,per=SEG+HOLD,seg=Math.floor(el/per),inSeg=el-seg*per;
+    const t=Math.min(rN,from+seg+Math.min(1,Math.max(0,(inSeg-HOLD)/SEG)));
+    show(Math.round(t*100)/100);if(t>=rN)stop()};
+  btn.onclick=()=>{if(timer){stop();return}from=+slider.value>=rN?r0:Math.floor(+slider.value);start=performance.now();btn.textContent='❚❚ Pause';timer=setInterval(tick,30)};
+  slider.oninput=()=>{stop();show(+slider.value)};
+  show(r0);
+  if(host.closest('main')){const obs=new MutationObserver(()=>{if(!document.body.contains(movie)){stop();obs.disconnect()}});obs.observe(document.body,{childList:true,subtree:true})}
+
+  // Static panels, one per round (no path lines).
+  const grid=document.createElement('div');grid.className='grid4';grid.style.gridTemplateColumns=`repeat(${rounds.length},minmax(0,1fr))`;host.appendChild(grid);
+  rounds.forEach(k=>{
+    const cell=document.createElement('div');cell.className='panel';grid.appendChild(cell);
+    const W=260,H=230,svg=mk(cell,'svg',{width:'100%',viewBox:`0 0 ${W} ${H}`,role:'img','aria-label':`Positions at round ${k}`});
+    mk(svg,'text',{x:10,y:16,'font-size':13,'font-weight':600,fill:T.ink},`Round ${k}`);
+    const [sx,sy]=frame(svg,W,H,24);if(k===r0)drawArrows(svg,sx,sy);
+    series.forEach(s=>{const p=s.pts[k];if(!p)return;hover(dot(svg,s,sx(p[0]),sy(p[1]),4.5),`${s.label} · round ${k}`)});
+  });
+}
+const legend=agents=>{const present=LAB_ORDER.filter(p=>agents.some(a=>prov(a.model)===p));
+  return `<div class="note" style="display:flex;gap:12px;flex-wrap:wrap;margin:4px 0">${present.map(p=>`<span><span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:${LAB_COLORS[LAB_ORDER.indexOf(p)]};margin-right:5px;vertical-align:-1px"></span>${LAB[p]}</span>`).join('')}<span>filled/solid = higher tier · hollow/dashed = cheaper tier · hover for the model</span></div>`};
+
+// Theory radars through time: one panel per agent, one polygon per round (light R0 -> dark R3).
+function theoryRadars(host,agents){
+  const T=themeColors(),n=RADAR_AXES.length,cx=110,cy=112,Rr=70;
+  const pt=(k,v)=>{const a=-Math.PI/2+k*2*Math.PI/n;return [cx+Math.cos(a)*Rr*v/100,cy+Math.sin(a)*Rr*v/100]};
+  const poly=vals=>vals.map((v,k)=>pt(k,Math.max(0,v??0)).join(',')).join(' ');
+  host.insertAdjacentHTML('beforeend',`<div class="note" style="display:flex;gap:12px;margin:4px 0">${ROUNDS.map(k=>`<span><span style="display:inline-block;width:14px;height:4px;background:${ROUND_SHADES[k]};margin-right:5px;vertical-align:2px"></span>R${k}</span>`).join('')}<span>score as % of each rubric's maximum</span></div>`);
+  const grid=document.createElement('div');grid.className='gridp';host.appendChild(grid);
+  agents.forEach(a=>{
+    const cell=document.createElement('div');cell.className='panel';grid.appendChild(cell);
+    const svg=mk(cell,'svg',{viewBox:'-45 0 310 225',width:'100%',role:'img','aria-label':`${labelOf(a,agents)} theory profile by round`});
+    [25,50,75,100].forEach(r=>mk(svg,'polygon',{points:poly(RADAR_AXES.map(()=>r)),fill:'none',stroke:T.grid}));
+    RADAR_AXES.forEach(([,s],k)=>{const p=pt(k,100),q=pt(k,118);mk(svg,'line',{x1:cx,y1:cy,x2:p[0],y2:p[1],stroke:T.grid});
+      mk(svg,'text',{x:q[0],y:q[1]+4,'text-anchor':Math.abs(q[0]-cx)<5?'middle':q[0]>cx?'start':'end','font-size':11,fill:T.mut},s)});
+    let any=false;
+    ROUNDS.forEach(k=>{const vals=RADAR_AXES.map(([key])=>pct(a.rec[k],key));if(vals.some(v=>v==null))return;any=true;
+      const pg=mk(svg,'polygon',{points:poly(vals),fill:'none',stroke:ROUND_SHADES[k],'stroke-width':k===3?2.5:1.8,'stroke-linejoin':'round'});
+      hover(pg,`${labelOf(a,agents)} · R${k}: `+RADAR_AXES.map(([,s],i)=>`${s} ${vals[i].toFixed(0)}%`).join(', '))});
+    const title=trunc(labelOf(a,agents),28);
+    mk(svg,'circle',{cx:cx-title.length*3.6-8,cy:10,r:4.5,fill:cheap(a.model)?T.bg:labColor(a.model),stroke:labColor(a.model),'stroke-width':2});
+    mk(svg,'text',{x:cx,y:14,'text-anchor':'middle','font-size':13,'font-weight':600,fill:T.ink},title);
+    if(!any)mk(svg,'text',{x:cx,y:cy,'text-anchor':'middle','font-size':11,fill:T.mut},'not judged yet');
+  });
+}
+
+// ---------- page ----------
+function render(){
+  const runs=[...new Set(REC.filter(r=>r.condition!=='round0').map(r=>r.run_id))].sort().reverse();
+  if(!runs.includes(state.run))state.run=runs[0];
+  $('#run').innerHTML=runs.map(r=>`<option ${r===state.run?'selected':''}>${r}</option>`).join('');
+  if(!state.run){$('#main').innerHTML='<p class="note">No multi-round runs yet.</p>';return}
+  const recs=runRecords(state.run);
+  const pairs=[...new Set(recs.filter(r=>r.condition==='pair').map(r=>r.group))].sort((a,b)=>rank('x/'+a.split('+')[1])-rank('x/'+b.split('+')[1]));
+  if(!pairs.includes(state.pair))state.pair=pairs[0];
+  $('#pair').innerHTML=pairs.map(p=>`<option value="${esc(p)}" ${p===state.pair?'selected':''}>${esc(p.replace('pair:',''))}</option>`).join('');
+  $('#pair').style.display=state.cond==='pair'?'':'none';
+  $('#cond').value=state.cond;
+  const group=state.cond==='pair'?state.pair:state.cond;
+  const agents=agentsOf(recs,group);
+  const anchor=state.cond==='pair'?'anthropic/'+state.pair.split(':')[1].split('+')[0]:null;
+
+  // Coverage of rubric judgments (rounds 1-3 may be pending).
+  const dilemma=recs[0]?.dilemma||'',ok=Object.keys(ITEMS).find(k=>dilemma.startsWith(k)),opts=ok?ITEMS[ok]:null;
+  const privs=recs.filter(r=>r.kind==='private'),judged=privs.filter(r=>verdict(r,`${JUDGE}|neutral`)).length;
+  const rubricKey=`${JUDGE}|${state.rubric}`;
+  $('#main').innerHTML=`
+    <h2 style="margin-top:12px">Dilemma</h2>
+    <details class="panel" style="padding:8px 12px"><summary style="cursor:pointer">${esc(trunc(dilemma,160))}</summary><div style="white-space:pre-wrap;margin-top:6px">${esc(dilemma)}</div></details>
+    ${opts?`<div style="display:grid;gap:6px;margin-top:6px"><div class="panel" style="display:flex;gap:10px;padding:8px 12px"><b style="color:var(--acc)">A</b>${esc(opts.option_a)}<span class="note" style="margin-left:auto;white-space:nowrap">stance −5</span></div><div class="panel" style="display:flex;gap:10px;padding:8px 12px"><b style="color:var(--acc)">B</b>${esc(opts.option_b)}<span class="note" style="margin-left:auto;white-space:nowrap">stance +5</span></div><div class="note">0 = neither / balanced middle path</div></div>`:''}
+    ${judged<privs.length?`<div class="warn">Rubric judgments cover ${judged} of ${privs.length} private responses in this run, so MCA and theory panels show only judged rounds. Stance is coded for all rounds.</div>`:''}
+    <h2>Stance over rounds</h2><div class="note">−5 strongly favors A · +5 strongly favors B. One row per agent, one column per round (−5 = A, +5 = B). Bottom row: mean (dot) ± SD (bar) across agents. Hover a dot to trace what moved it from the previous round.</div>
+    <div id="stance"></div>
+    <h3>Dispersion over rounds (all conditions)</h3><div class="note">Lower = more agreement. Forum and control: SD of stance across the 12 agents. Pairs: average gap between partners.</div><div id="disp"></div>
+    <div class="panel" style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:24px;padding:8px 12px"><b style="font-size:13px">MCA / PCA fit</b>
+      <select id="fitFrom"><option value="0" ${state.fitFrom===0?'selected':''}>rounds 0–3</option><option value="1" ${state.fitFrom===1?'selected':''}>rounds 1–3 only (zoom into later changes)</option></select>
+      <select id="fitScope"><option value="all" ${state.fitScope==='all'?'selected':''}>fitted on all conditions</option><option value="cond" ${state.fitScope==='cond'?'selected':''}>fitted on this condition only</option></select>
+      <span class="note">Changing the fit changes the axes; positions are comparable only within one setting.</span></div>
+    <h2>Rubric profile over rounds (MCA) <select id="rubric"><option value="neutral" ${state.rubric==='neutral'?'selected':''}>neutral rubric</option><option value="ALL" ${state.rubric==='ALL'?'selected':''}>all rubrics combined</option></select></h2>
+    <div class="note">One MCA fitted on the judged private responses selected above (shared across panels, so positions are comparable across rounds). Press play to watch agents move between rounds; panels below show each round.</div>
+    <div id="mca"></div>
+    <h2>Theory profile over rounds (PCA)</h2>
+    <div class="note">PCA of each response's six theory scores (neutral + 5 theory rubrics, % of max), fitted on the responses selected above. Arrows in the first panel show which theory pulls in which direction.</div>
+    <div id="pca"></div>
+    <h3>Theory radar by round</h3><div id="radars"></div>
+    <h2>Influence</h2><div id="influence"></div>`;
+  $('#rubric').onchange=e=>{state.rubric=e.target.value;render()};
+  $('#fitFrom').onchange=e=>{state.fitFrom=+e.target.value;render()};
+  $('#fitScope').onchange=e=>{state.fitScope=e.target.value;render()};
+
+  // Stance
+  const st=$('#stance');
+  if(state.cond==='pair'){
+    const rows=pairs.map(p=>{const ag=agentsOf(recs,p),o=ag.find(a=>a.model.includes('opus')),q=ag.find(a=>a!==o)||ag[1];
+      return {label:p.replace('pair:claude-opus-5.5+','Opus + '),dots:[o,q].map(a=>({name:a===o?'Opus':labelOf(q,[q]),color:labColor(a.model),hollow:a!==o&&cheap(a.model),vals:ROUNDS.map(k=>stanceOf(a.rec[k])),agent:a}))}});
+    st.insertAdjacentHTML('beforeend','<div class="note">One row per pair: Opus (solid orange) and the partner in its lab color.</div>');
+    stanceRows(st,rows,{diag:(a,k)=>({...(k?transition(recs,a,k):{edges:[]}),html:transitionHTML(recs,a,k)})});
+    st.insertAdjacentHTML('beforeend','<h3>Who moved toward whom</h3><div class="note">Agents grouped by their side at R(k−1). Counts of mentions in their round-k private responses and of newly met arguments shared with peers, split by the peer\'s side at R(k−1). In brackets: per available peer on that side, since the sides differ in size.</div>');
+    sideTable(st,recs,pairs.flatMap(p=>agentsOf(recs,p)));
+    st.insertAdjacentHTML('beforeend','<h3>Movie</h3><div class="note">Same rows; press play to watch the pairs move.</div>');
+    stanceMovie(st,rows);
+  } else { const rows=agents.map(a=>({label:labelOf(a,agents),dots:[{name:labelOf(a,agents),color:labColor(a.model),hollow:cheap(a.model),vals:ROUNDS.map(k=>stanceOf(a.rec[k])),agent:a}]}));
+    stanceRows(st,rows,{diag:(a,k)=>({...(k?transition(recs,a,k):{edges:[]}),html:transitionHTML(recs,a,k)})});
+    if(group!=='control'){st.insertAdjacentHTML('beforeend','<h3>Who moved toward whom</h3><div class="note">Agents grouped by their side at R(k−1). Counts of mentions in their round-k private responses and of newly met arguments shared with peers, split by the peer\'s side at R(k−1). In brackets: per available peer on that side, since the sides differ in size.</div>');
+      sideTable(st,recs,agents);}
+    st.insertAdjacentHTML('beforeend','<h3>Movie</h3><div class="note">Same rows; press play to watch stances move between rounds.</div>');
+    stanceMovie(st,rows);
+  }
+  dispersionChart($('#disp'),recs);
+
+  // MCA, fitted on all judged private responses in the run
+  // Responses the MCA / PCA are fitted on: round window and condition scope from the fit controls.
+  const inScope=r=>r.round>=state.fitFrom&&(state.fitScope==='all'||(state.cond==='pair'?r.condition==='pair':r.group===state.cond));
+  const fitRounds=ROUNDS.filter(k=>k>=state.fitFrom);
+  const fit=privs.filter(inScope).map(r=>[r,verdict(r,rubricKey)]).filter(([,v])=>v);
+  const mhost=$('#mca');mhost.insertAdjacentHTML('beforeend',legend(agents));
+  if(fit.length>=3){
+    const V=fit.map(([,v])=>v.frac),varying=V[0].map((_,i)=>i).filter(i=>V.some(v=>v[i]!==V[0][i]));
+    if(varying.length>=2){
+      const res=mca(V,varying),pos=new Map(fit.map(([r],i)=>[r._ref,res.F[i]]));
+      mhost.insertAdjacentHTML('beforeend',`<div class="note">Fitted on ${fit.length} responses · ${varying.length} varying criteria · Dim 1 ${res.pct[0].toFixed(0)}%, Dim 2 ${res.pct[1].toFixed(0)}% of inertia</div>`);
+      trajectoryPanels(mhost,agents.map(a=>({label:labelOf(a,agents),color:labColor(a.model),hollow:cheap(a.model),pts:ROUNDS.map(k=>a.rec[k]&&pos.get(a.rec[k]._ref)||null)})),{rounds:fitRounds});
+    } else mhost.insertAdjacentHTML('beforeend','<p class="note">Not enough variation to fit an MCA.</p>');
+  } else mhost.insertAdjacentHTML('beforeend','<p class="note">Need at least 3 judged responses.</p>');
+
+  // Theory PCA on six-score vectors
+  const tfit=privs.filter(inScope).map(r=>[r,RADAR_AXES.map(([k])=>pct(r,k))]).filter(([,v])=>v.every(x=>x!=null));
+  const phost=$('#pca');phost.insertAdjacentHTML('beforeend',legend(agents));
+  if(tfit.length>=3){
+    const X=tfit.map(([,v])=>v),d=X[0].length,mean=[...Array(d)].map((_,j)=>X.reduce((s,x)=>s+x[j],0)/X.length);
+    const C=[...Array(d)].map((_,a)=>[...Array(d)].map((_,b)=>X.reduce((s,x)=>s+(x[a]-mean[a])*(x[b]-mean[b]),0)/(X.length-1)));
+    const {values,vectors}=eigSym(C),tot=values.reduce((a,b)=>a+Math.max(0,b),0);
+    const proj=x=>[0,1].map(c=>x.reduce((s,v,j)=>s+(v-mean[j])*vectors[j][c],0));
+    const pos=new Map(tfit.map(([r,x])=>[r._ref,proj(x)]));
+    // Loadings scaled to the score spread so arrows share the panel scale.
+    const spread=Math.max(...tfit.map(([,x])=>Math.hypot(...proj(x))))||1;
+    const arrows=RADAR_AXES.map(([,s],j)=>[s,vectors[j][0]*spread,vectors[j][1]*spread]);
+    phost.insertAdjacentHTML('beforeend',`<div class="note">Fitted on ${tfit.length} responses · PC1 ${(100*values[0]/tot).toFixed(0)}%, PC2 ${(100*values[1]/tot).toFixed(0)}% of variance</div>`);
+    trajectoryPanels(phost,agents.map(a=>({label:labelOf(a,agents),color:labColor(a.model),hollow:cheap(a.model),pts:ROUNDS.map(k=>a.rec[k]&&pos.get(a.rec[k]._ref)||null)})),{arrows,rounds:fitRounds});
+  } else phost.insertAdjacentHTML('beforeend','<p class="note">Need at least 3 responses judged on all six rubrics.</p>');
+
+  theoryRadars($('#radars'),agents);
+  renderInfluence($('#influence'),recs);
+}
+
+// ---------- influence ----------
+// Ridge least squares: minimise |F w - y|^2 + lam |w|^2 (Gaussian elimination on the normal equations).
+function ridge(F,y,lam){
+  const m=F[0].length,A=[...Array(m)].map((_,a)=>[...Array(m)].map((_,b)=>F.reduce((s,f)=>s+f[a]*f[b],0)+(a===b?lam:0))),b=[...Array(m)].map((_,a)=>F.reduce((s,f,i)=>s+f[a]*y[i],0));
+  for(let c=0;c<m;c++){let p=c;for(let r=c+1;r<m;r++)if(Math.abs(A[r][c])>Math.abs(A[p][c]))p=r;[A[c],A[p]]=[A[p],A[c]];[b[c],b[p]]=[b[p],b[c]];
+    if(Math.abs(A[c][c])<1e-12)continue;for(let r=0;r<m;r++){if(r===c)continue;const f=A[r][c]/A[c][c];for(let k=c;k<m;k++)A[r][k]-=f*A[c][k];b[r]-=f*b[c]}}
+  return b.map((v,i)=>Math.abs(A[i][i])<1e-12?0:v/A[i][i]);
+}
+// DeGroot-style fit with one influence weight per speaker, shared across listeners. rows: [{block, f: [m], y}].
+// Bootstrap resamples whole blocks (listener x round) for a 90% interval.
+function fitInfluence(rows,m,B=200){
+  if(rows.length<m) return null;
+  const lamOf=F=>0.05*F.reduce((s,f)=>s+f.reduce((t,v)=>t+v*v,0),0)/m+1e-9;  // 5% of the mean diagonal of F'F
+  const F=rows.map(r=>r.f),y=rows.map(r=>r.y),w=ridge(F,y,lamOf(F));
+  const blocks=[...new Set(rows.map(r=>r.block))],byB=Object.fromEntries(blocks.map(b=>[b,rows.filter(r=>r.block===b)]));
+  let seed=1;const rnd=()=>(seed=(seed*16807)%2147483647)/2147483647;  // deterministic so the page is stable across reloads
+  const boots=[];for(let t=0;t<B;t++){const rs=[];for(let i=0;i<blocks.length;i++)rs.push(...byB[blocks[Math.floor(rnd()*blocks.length)]]);const Fb=rs.map(r=>r.f);boots.push(ridge(Fb,rs.map(r=>r.y),lamOf(Fb)))}
+  const q=(arr,p)=>{const s=arr.slice().sort((a,b)=>a-b);return s[Math.min(s.length-1,Math.floor(p*s.length))]};
+  return {w,lo:w.map((_,j)=>q(boots.map(b=>b[j]),0.05)),hi:w.map((_,j)=>q(boots.map(b=>b[j]),0.95)),n:rows.length};
+}
+// Horizontal estimate + interval chart, one row per agent, sorted by estimate.
+function weightChart(host,items,{title,unit=''}={}){
+  const T=themeColors();items=items.filter(d=>d.v!=null).sort((a,b)=>b.v-a.v);
+  if(!items.length){host.insertAdjacentHTML('beforeend','<p class="note">Not enough data yet.</p>');return}
+  const lo=Math.min(0,...items.map(d=>d.lo??d.v)),hi=Math.max(0,...items.map(d=>d.hi??d.v)),span=(hi-lo)||1;
+  const W=520,L=150,R=W-60,row=20,Tp=title?24:8,H=Tp+items.length*row+22,sx=v=>L+(v-lo+span*0.04)/(span*1.08)*(R-L);
+  const svg=mk(host,'svg',{width:'100%',viewBox:`0 0 ${W} ${H}`,role:'img','aria-label':title||'influence estimates'});svg.style.maxWidth='620px';
+  if(title)mk(svg,'text',{x:0,y:14,'font-size':13,'font-weight':600,fill:T.ink},title);
+  mk(svg,'line',{x1:sx(0),x2:sx(0),y1:Tp-4,y2:H-18,stroke:T.mut,'stroke-dasharray':'3 3'});
+  items.forEach((d,i)=>{const y=Tp+i*row+row/2;
+    mk(svg,'text',{x:L-8,y:y+4,'text-anchor':'end','font-size':11,fill:T.ink},trunc(d.label,22));
+    if(d.lo!=null)mk(svg,'line',{x1:sx(d.lo),x2:sx(d.hi),y1:y,y2:y,stroke:d.color,'stroke-width':2,'stroke-opacity':0.5});
+    const c=mk(svg,'circle',{cx:sx(d.v),cy:y,r:d.hollow?4:4.5,fill:d.hollow?T.bg:d.color,stroke:d.color,'stroke-width':2});
+    hover(c,`${d.label}: ${d.v.toFixed(3)}${unit}${d.lo!=null?` (90% interval ${d.lo.toFixed(3)} to ${d.hi.toFixed(3)})`:''}${d.note?' · '+d.note:''}`);
+    mk(svg,'text',{x:R+6,y:y+4,'font-size':11,fill:T.mut},d.v.toFixed(2));
+  });
+  mk(svg,'text',{x:sx(0),y:H-4,'text-anchor':'middle','font-size':10,fill:T.mut},'0');
+}
+function renderInfluence(host,recs){
+  if(!host)return;
+  const forum=agentsOf(recs,'forum'),control=agentsOf(recs,'control');
+  const ctrlOf=a=>control.find(c=>c.model===a.model);
+  const posts={};recs.filter(r=>r.group==='forum'&&r.kind==='public').forEach(r=>posts[`${r.agent}|${r.round}`]=r);
+  const key=`${JUDGE}|${state.rubric}`,vec=r=>verdict(r,key)?.frac;
+  const item=(a,v,lo,hi,note)=>({label:labelOf(a,forum),color:labColor(a.model),hollow:cheap(a.model),v,lo,hi,note});
+  const m=forum.length;
+
+  // 1) Stance DeGroot (forum): listener change, minus the same model's change in control, explained by
+  //    pulls toward each speaker's public post stance in that phase.
+  const srows=[];
+  forum.forEach((a,i)=>[1,2,3].forEach(k=>{
+    const x0=stanceOf(a.rec[k-1]),x1=stanceOf(a.rec[k]),c=ctrlOf(a),c0=c&&stanceOf(c.rec[k-1]),c1=c&&stanceOf(c.rec[k]);
+    if(x0==null||x1==null)return;
+    const f=forum.map((b,j)=>{if(j===i)return 0;const p=stanceOf(posts[`${b.agent}|${k}`])??stanceOf(b.rec[k-1]);return p==null?0:(p-x0)/(m-1)});
+    srows.push({block:`${i}|${k}`,f,y:(x1-x0)-((c0!=null&&c1!=null)?c1-c0:0)});
+  }));
+  const sfit=fitInfluence(srows,m);
+
+  // 2) Criteria-space DeGroot (forum): same model per criterion; speakers' latest private checklists stand in
+  //    for what they argued (posts are not judged).
+  const crows=[];let vary=null;
+  const allv=forum.flatMap(a=>ROUNDS.map(k=>vec(a.rec[k]))).filter(Boolean);
+  if(allv.length){vary=allv[0].map((_,c)=>c).filter(c=>allv.some(v=>v[c]!==allv[0][c]))}
+  if(vary) forum.forEach((a,i)=>[1,2,3].forEach(k=>{
+    const v0=vec(a.rec[k-1]),v1=vec(a.rec[k]),c=ctrlOf(a),cv0=c&&vec(c.rec[k-1]),cv1=c&&vec(c.rec[k]);
+    if(!v0||!v1)return;const sp=forum.map(b=>vec(b.rec[k-1]));
+    vary.forEach(cc=>crows.push({block:`${i}|${k}`,f:forum.map((b,j)=>j===i||!sp[j]?0:(sp[j][cc]-v0[cc])/(m-1)),y:(v1[cc]-v0[cc])-((cv0&&cv1)?cv1[cc]-cv0[cc]:0)}));
+  }));
+  const cfit=crows.length?fitInfluence(crows,m):null;
+
+  // 3) Criterion contagion (forum): a criterion is adopted when it goes from absent to present for a listener;
+  //    each speaker who had it in the previous round shares the credit. Control gives the base rate.
+  const credit=forum.map(()=>0),spread={};let adoptF=0,adoptC=0,slotsF=0,slotsC=0;
+  const crit=allv.length?verdict(forum.find(a=>vec(a.rec[0]))?.rec[0],key)?.criteria:null;
+  if(vary) forum.forEach((a,i)=>[1,2,3].forEach(k=>{
+    const v0=vec(a.rec[k-1]),v1=vec(a.rec[k]);if(!v0||!v1)return;
+    vary.forEach(cc=>{if(v0[cc]>=0.5)return;slotsF++;if(v1[cc]<0.5)return;adoptF++;
+      const holders=forum.map((b,j)=>j!==i&&vec(b.rec[k-1])?.[cc]>=0.5?j:-1).filter(j=>j>=0);
+      holders.forEach(j=>credit[j]+=1/holders.length);spread[cc]=(spread[cc]||0)+1;});
+  }));
+  if(vary) control.forEach(a=>[1,2,3].forEach(k=>{const v0=vec(a.rec[k-1]),v1=vec(a.rec[k]);if(!v0||!v1)return;vary.forEach(cc=>{if(v0[cc]>=0.5)return;slotsC++;if(v1[cc]>=0.5)adoptC++})}));
+
+  // 4) Attention: how often each agent is named in others' forum posts.
+  const named=forum.map(()=>0);
+  recs.filter(r=>r.group==='forum'&&r.kind==='public').forEach(r=>new Set((r.reply.match(/Agent (\d+)/g)||[])).forEach(s=>{const j=forum.findIndex(a=>a.agent===s);if(j>=0&&s!==r.agent)named[j]++}));
+
+  // 5) Pairs: meeting point relative to the two starts (0 = Opus's start, 1 = partner's start), and
+  //    per-pair criteria pull in each direction (control-adjusted).
+  const pairGroups=[...new Set(recs.filter(r=>r.condition==='pair').map(r=>r.group))].sort((a,b)=>rank('x/'+a.split('+')[1])-rank('x/'+b.split('+')[1]));
+  const pairRows=pairGroups.map(g=>{
+    const ag=agentsOf(recs,g),o=ag.find(a=>a.model.includes('opus')),p=ag.find(a=>a!==o)||ag[1];
+    const o0=stanceOf(o.rec[0]),p0=stanceOf(p.rec[0]),o3=stanceOf(o.rec[3]),p3=stanceOf(p.rec[3]);
+    const meet=(o0!=null&&p0!=null&&o3!=null&&p3!=null&&o0!==p0)?(((o3+p3)/2)-o0)/(p0-o0):null;
+    const pull=(lis,spk)=>{let num=0,den=0;const c=ctrlOf(lis);[1,2,3].forEach(k=>{const a0=vec(lis.rec[k-1]),a1=vec(lis.rec[k]),s0=vec(spk.rec[k-1]),c0=c&&vec(c.rec[k-1]),c1=c&&vec(c.rec[k]);
+      if(!a0||!a1||!s0)return;a0.forEach((x,cc)=>{const d=s0[cc]-x;num+=((a1[cc]-x)-((c0&&c1)?c1[cc]-c0[cc]:0))*d;den+=d*d})});return den?num/den:null};
+    return {g,partner:p,o0,p0,o3,p3,meet,oToP:pull(p,o),pToO:pull(o,p)};
+  });
+
+  const T=themeColors(),f=v=>v==null?'–':v.toFixed(2);
+  host.innerHTML=`<div class="note">All measures are provisional: one run, three rounds. Criteria-based measures use the ${state.rubric==='ALL'?'combined':'neutral'} rubric (switch above, in the MCA heading) and need round 1–3 judgments.</div>
+    <h3>Forum: influence weights</h3>
+    <div class="note">How much listeners move toward each agent, beyond what the same model drifts in control. Fitted with one weight per speaker (DeGroot model, ridge-regularised); lines are 90% bootstrap intervals. Left: stance, using each speaker's public post stance. Right: rubric criteria, using each speaker's latest private checklist.</div>
+    <div class="grid2" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(380px,1fr));gap:10px"><div id="inf-s" class="panel"></div><div id="inf-c" class="panel"></div></div>
+    <h3>Forum: criterion contagion and attention</h3>
+    <div class="note">Contagion credit: when a listener adopts a criterion, the speakers who already had it share one point. Adoption rate per listener-round-criterion slot: forum ${slotsF?(100*adoptF/slotsF).toFixed(1)+'%':'–'} vs control ${slotsC?(100*adoptC/slotsC).toFixed(1)+'%':'–'} (control = adopting with nobody to copy). Attention: posts by others that name the agent.</div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(380px,1fr));gap:10px"><div id="inf-k" class="panel"></div><div id="inf-a" class="panel"></div></div>
+    <div id="inf-top"></div>
+    <h3>Pairs: who moved toward whom</h3>
+    <div class="note">Meeting point = where the pair's final average sits between the two starting stances: 0 = at Opus's start (Opus pulled the partner), 1 = at the partner's start, outside 0–1 = both drifted elsewhere. Criteria pull = control-adjusted movement of one agent's checklist toward the other's, per round (positive = moved toward).</div>
+    <div class="panel" style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:13px"><thead><tr style="text-align:left;color:var(--mut)"><th style="padding:4px 8px">Partner</th><th>Opus R0→R3</th><th>Partner R0→R3</th><th>Meeting point</th><th>Criteria pull: Opus → partner</th><th>Criteria pull: partner → Opus</th></tr></thead><tbody>
+    ${pairRows.map(r=>`<tr style="border-top:1px solid var(--line)"><td style="padding:4px 8px">${esc(labelOf(r.partner,[r.partner]))}${r.partner.model.includes('opus')?' (self)':''}</td><td>${r.o0??'–'} → ${r.o3??'–'}</td><td>${r.p0??'–'} → ${r.p3??'–'}</td><td>${r.meet==null?'n/a (same start)':r.meet.toFixed(2)}</td><td>${f(r.oToP)}</td><td>${f(r.pToO)}</td></tr>`).join('')}
+    </tbody></table></div>`;
+  weightChart($('#inf-s'),forum.map((a,j)=>item(a,sfit?.w[j],sfit?.lo[j],sfit?.hi[j])),{title:`Stance (${sfit?sfit.n:0} listener-rounds)`});
+  weightChart($('#inf-c'),forum.map((a,j)=>item(a,cfit?.w[j],cfit?.lo[j],cfit?.hi[j])),{title:`Rubric criteria (${cfit?cfit.n:0} observations)`});
+  weightChart($('#inf-k'),forum.map((a,j)=>item(a,vary&&slotsF?credit[j]:null)),{title:`Contagion credit (${adoptF} adoptions)`});
+  weightChart($('#inf-a'),forum.map((a,j)=>item(a,named[j])),{title:'Named in others\' posts'});
+  const top=Object.entries(spread).sort((a,b)=>b[1]-a[1]).slice(0,5);
+  if(top.length&&crit)$('#inf-top').innerHTML=`<div class="note" style="margin-top:6px"><b>Most-adopted criteria in the forum:</b><br>${top.map(([c,n])=>`${n}× — ${esc(crit[c])}`).join('<br>')}</div>`;
+}
+async function load(){
+  const [rec,judg,st,items]=await Promise.all(['/api/records','/api/judgments','/api/stances','/api/items'].map(u=>fetch(u).then(r=>r.json())));
+  ITEMS=items;
+  rec.forEach((r,i)=>r._ref=r._ref||`discussion.jsonl:${i}`);REC=rec;WANT=new Map();
+  J={};for(const j of judg){j.rubric=j.rubric||'neutral';j.key=`${j.judge}|${j.rubric}`;(J[j.reply_ref]=J[j.reply_ref]||[]).push(j)}
+  ST={};for(const s of st)if(s.valid)(ST[s.reply_ref]=ST[s.reply_ref]||[]).push(s);
+  render();
+}
+$('#run').onchange=e=>{state.run=e.target.value;render()};
+$('#cond').onchange=e=>{state.cond=e.target.value;render()};
+$('#pair').onchange=e=>{state.pair=e.target.value;render()};
+$('#reload').onclick=load;
+load();
+</script>
+</body>
+</html>

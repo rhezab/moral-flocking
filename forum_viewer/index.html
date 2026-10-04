@@ -1,0 +1,121 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Forum transcripts</title>
+<style>
+:root{--bg:#fafaf8;--fg:#1d1d1b;--mut:#6b6b66;--line:#e2e1db;--card:#fff;--acc:#2f5fd0;--sel:#eaf0fd;--mark:#fff3c4}
+@media(prefers-color-scheme:dark){:root{--bg:#161614;--fg:#ecebe6;--mut:#9a9992;--line:#2f2f2b;--card:#1f1f1c;--acc:#7da2ff;--sel:#212a40;--mark:#4a3f16}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:14px/1.55 system-ui,-apple-system,sans-serif}
+header{position:sticky;top:0;z-index:2;background:var(--bg);display:flex;gap:10px;align-items:center;padding:10px 16px;border-bottom:1px solid var(--line);flex-wrap:wrap}
+h1{font-size:15px;margin:0 8px 0 0}
+select,button{font:inherit;color:inherit;background:var(--card);border:1px solid var(--line);border-radius:6px;padding:4px 10px}
+label{font-size:13px;color:var(--mut);display:flex;gap:5px;align-items:center}
+main{max-width:900px;margin:0 auto;padding:12px 20px 80px}
+h2{font-size:16px;margin:30px 0 8px;padding-bottom:4px;border-bottom:1px solid var(--line)}
+.note{color:var(--mut);font-size:12px}
+.post{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:10px 14px;margin:10px 0;border-left-width:4px}
+.post .h{display:flex;gap:8px;align-items:baseline;flex-wrap:wrap;font-size:12px;color:var(--mut);margin-bottom:4px}
+.post .h b{color:var(--fg);font-size:14px}
+.post .b{white-space:pre-wrap}
+.post.dim{opacity:.35}
+.priv{background:transparent;border:1px dashed var(--line);border-radius:10px;padding:8px 12px;margin:8px 0}
+.priv summary{cursor:pointer;font-size:13px;color:var(--mut)}
+.priv .b{white-space:pre-wrap;font-size:13px;margin-top:6px}
+.badge{display:inline-block;font-size:11px;padding:0 7px;border-radius:9px;border:1px solid var(--line);color:var(--mut)}
+.mention{background:var(--mark);border-radius:3px;padding:0 2px;cursor:help}
+.dot{display:inline-block;width:10px;height:10px;border-radius:50%;vertical-align:-1px;border:2px solid}
+.opts{display:grid;gap:6px;margin-top:6px}
+.opts>div{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:6px 12px;display:flex;gap:10px}
+.empty{color:var(--mut);padding:30px}
+</style>
+</head>
+<body>
+<header>
+  <h1>Forum transcripts</h1>
+  <select id="run"></select>
+  <select id="group"></select>
+  <select id="focus" title="highlight one agent"></select>
+  <label><input type="checkbox" id="priv"> show private responses</label>
+  <button id="reload">Reload</button>
+</header>
+<main id="main"><div class="empty">Loading…</div></main>
+<script>
+const $=s=>document.querySelector(s);
+const esc=s=>String(s??'').replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+const short=m=>String(m||'').split('/').pop();
+const ORDER=['claude-opus-5.5','claude-haiku-4.5','gpt-6.1-sol','gpt-6-luna','grok-4.7','grok-4.3','qwen3.8-max-prime','qwen3.8-flash','deepseek-v4-pro-0813','deepseek-v4.1-flash','glm-5.3-prime','glm-5.3-flash'];
+const rank=m=>{const i=ORDER.indexOf(short(m));return i<0?99:i};
+const LAB_ORDER=['anthropic','openai','x-ai','qwen','deepseek','z-ai'];
+// Same brand-associated colors as the other viewers.
+const LAB_COLORS=matchMedia('(prefers-color-scheme: dark)').matches?['#D27350','#20AE80','#ecebe6','#A82E63','#4F80EC','#7F6F10']:['#D97757','#10A37F','#1d1d1b','#C2185B','#2F6FE4','#8A6D00'];
+const labColor=m=>LAB_COLORS[LAB_ORDER.indexOf(m.split('/')[0])]??'#898781',cheap=m=>rank(m)%2===1;
+let REC=[],ST={},ITEMS={},state={run:null,group:'forum',focus:'',priv:false};
+const stanceOf=r=>{const s=r&&ST[r._ref];return s&&s.length?s.reduce((a,x)=>a+x.stance,0)/s.length:null};
+const fmtS=v=>v==null?'–':(v>0?'+':'')+(Math.round(v*10)/10);
+const dot=m=>`<span class="dot" style="border-color:${labColor(m)};background:${cheap(m)?'transparent':labColor(m)}"></span>`;
+
+function runRecords(run){
+  const own=REC.filter(r=>r.run_id===run),dilemma=own[0]?.dilemma,key=r=>`${r.model_requested}|${r.agent}`;
+  const have=new Set(own.filter(r=>r.condition==='round0').map(key));
+  const src=own.find(r=>r.round0_from)?.round0_from||[...new Set(REC.filter(r=>r.condition==='round0'&&r.dilemma===dilemma&&r.run_id<run).map(r=>r.run_id))].sort().pop();
+  return own.concat(REC.filter(r=>r.run_id===src&&r.run_id!==run&&r.condition==='round0'&&!have.has(key(r))));
+}
+function render(){
+  const runs=[...new Set(REC.filter(r=>r.kind==='public').map(r=>r.run_id))].sort().reverse();
+  if(!runs.includes(state.run))state.run=runs[0];
+  $('#run').innerHTML=runs.map(r=>`<option ${r===state.run?'selected':''}>${r}</option>`).join('');
+  if(!state.run){$('#main').innerHTML='<div class="empty">No forum transcripts yet.</div>';return}
+  const recs=runRecords(state.run);
+  const groups=[...new Set(recs.filter(r=>r.kind==='public').map(r=>r.group))].sort((a,b)=>(a==='forum'?-1:b==='forum'?1:rank('x/'+a.split('+')[1])-rank('x/'+b.split('+')[1])));
+  if(!groups.includes(state.group))state.group=groups[0];
+  $('#group').innerHTML=groups.map(g=>`<option value="${esc(g)}" ${g===state.group?'selected':''}>${g==='forum'?'forum (all agents)':esc(g.replace('pair:claude-opus-5.5+','pair: Opus + '))}</option>`).join('');
+
+  const posts=recs.filter(r=>r.group===state.group&&r.kind==='public');
+  const privs=recs.filter(r=>r.group===state.group&&r.kind==='private');
+  const agents=[...new Set(posts.map(r=>r.agent))].map(a=>({agent:a,model:posts.find(p=>p.agent===a).model_requested})).sort((x,y)=>+x.agent.split(' ')[1]-+y.agent.split(' ')[1]);
+  const modelOf=Object.fromEntries(agents.map(a=>[a.agent,a.model]));
+  $('#focus').innerHTML=`<option value="">highlight: none</option>`+agents.map(a=>`<option value="${a.agent}" ${a.agent===state.focus?'selected':''}>${a.agent} · ${short(a.model)}</option>`).join('');
+  if(!modelOf[state.focus])state.focus='';
+  // Round 0 for each agent: the round-0 response that appears in its round-1 prompt.
+  const r0s=recs.filter(r=>r.condition==='round0');
+  const r0Of=a=>{const p1=privs.find(r=>r.agent===a.agent&&r.round===1)?.messages?.[1]?.content||'';return r0s.find(r=>r.model_requested===a.model&&p1.includes(r.reply))};
+  const privAt=(a,k)=>k===0?r0Of(a):privs.find(r=>r.agent===a.agent&&r.round===k);
+  const dilemma=recs[0]?.dilemma||'',ok=Object.keys(ITEMS).find(k=>dilemma.startsWith(k)),opts=ok?ITEMS[ok]:null;
+  // Replace "Agent N" mentions (incl. "Agents 3, 5 and 7") with the model name; hover shows the original text.
+  const sub=n=>modelOf[`Agent ${n}`]?`<span class="mention" title="originally &quot;Agent ${n}&quot;">${short(modelOf['Agent '+n])}</span>`:`Agent ${n}`;
+  const body=t=>esc(t).replace(/\bAgents? (\d+)((?:(?:, and |, | and | & )\d+)*)/g,(m,n,rest)=>sub(n)+rest.replace(/\d+/g,sub));
+  const privBlock=k=>`<details class="priv"><summary>Private responses, round ${k} (not visible to agents)</summary>${agents.map(a=>{const r=privAt(a,k);return r?`<div style="margin-top:10px"><div class="note">${dot(a.model)} <b style="color:var(--fg)">${a.agent}</b> · ${short(a.model)} · stance ${fmtS(stanceOf(r))}</div><div class="b">${body(r.reply)}</div></div>`:''}).join('')}</details>`;
+  const phases=[...new Set(posts.map(r=>r.round))].sort((a,b)=>a-b);
+  const stanceTrail=a=>[0,1,2,3].map(k=>fmtS(stanceOf(privAt(a,k)))).join(' → ');
+
+  $('#main').innerHTML=`
+    <details class="note" style="margin-top:8px"><summary style="cursor:pointer">Dilemma: ${esc(dilemma.slice(0,140))}…</summary><div style="white-space:pre-wrap;color:var(--fg);margin-top:6px">${esc(dilemma)}</div></details>
+    ${opts?`<div class="opts"><div><b style="color:var(--acc)">A</b>${esc(opts.option_a)}<span class="note" style="margin-left:auto">−5</span></div><div><b style="color:var(--acc)">B</b>${esc(opts.option_b)}<span class="note" style="margin-left:auto">+5</span></div></div>`:''}
+    <p class="note">Agents saw only "Agent N" labels; model names are shown here for you. Posts appear in the order they were written. Stance badges: the post's own stance, and the agent's private stance before → after this phase. <b>Substitution:</b> in post text, every "Agent N" mention is replaced with that agent's model name (highlighted); hover a highlighted name to see the original "Agent N".</p>
+    <div class="note" style="display:flex;gap:12px;flex-wrap:wrap">${agents.map(a=>`<span>${dot(a.model)} ${a.agent} · ${short(a.model)} <span style="opacity:.8">(${stanceTrail(a)})</span></span>`).join('')}</div>
+    ${phases.map(k=>`
+      ${state.priv?privBlock(k-1):''}
+      <h2>Public phase ${k} <span class="note">after private round ${k-1}</span></h2>
+      ${posts.filter(r=>r.round===k).map(r=>{const a=agents.find(x=>x.agent===r.agent),before=stanceOf(privAt(a,k-1)),after=stanceOf(privAt(a,k));
+        return `<div class="post ${state.focus&&state.focus!==r.agent?'dim':''}" style="border-left-color:${labColor(r.model_requested)}"><div class="h">${dot(r.model_requested)}<b>${r.agent}</b><span>${short(r.model_requested)}</span>
+          <span class="badge">post stance ${fmtS(stanceOf(r))}</span><span class="badge">private ${fmtS(before)} → ${fmtS(after)}</span><span>${r.reply.split(/\s+/).length} words</span></div>
+          <div class="b">${body(r.reply)}</div></div>`}).join('')}`).join('')}
+    ${state.priv?privBlock(phases[phases.length-1]):''}`;
+}
+async function load(){
+  const [rec,st,items]=await Promise.all(['/api/records','/api/stances','/api/items'].map(u=>fetch(u).then(r=>r.json())));
+  REC=rec;ITEMS=items;ST={};for(const s of st)if(s.valid)(ST[s.reply_ref]=ST[s.reply_ref]||[]).push(s);
+  render();
+}
+$('#run').onchange=e=>{state.run=e.target.value;render()};
+$('#group').onchange=e=>{state.group=e.target.value;state.focus='';render()};
+$('#focus').onchange=e=>{state.focus=e.target.value;render()};
+$('#priv').onchange=e=>{state.priv=e.target.checked;render()};
+$('#reload').onclick=load;
+load();
+</script>
+</body>
+</html>

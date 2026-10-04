@@ -1,0 +1,11 @@
+# secrets
+.env
+.env.*
+# large raw run data (stances/judgments/transcripts as JSONL)
+runs/
+*.jsonl
+*.db
+# misc
+__pycache__/
+*.pyc
+.DS_Store

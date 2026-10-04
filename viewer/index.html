@@ -1,0 +1,193 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Experiment runs</title>
+<style>
+:root{--bg:#fafaf8;--fg:#1d1d1b;--mut:#6b6b66;--line:#e2e1db;--card:#fff;--acc:#2f5fd0;--sel:#eaf0fd;--pos:#2a8a4a;--neg:#c0392b}
+@media(prefers-color-scheme:dark){:root{--bg:#161614;--fg:#ecebe6;--mut:#9a9992;--line:#2f2f2b;--card:#1f1f1c;--acc:#7da2ff;--sel:#212a40;--pos:#5ec27f;--neg:#ff7a6b}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:14px/1.5 system-ui,-apple-system,sans-serif;height:100vh;display:flex;flex-direction:column}
+header{display:flex;gap:12px;align-items:center;padding:10px 16px;border-bottom:1px solid var(--line);flex-wrap:wrap}
+h1{font-size:15px;margin:0 8px 0 0}
+select,button{font:inherit;color:inherit;background:var(--card);border:1px solid var(--line);border-radius:6px;padding:4px 10px}
+button{cursor:pointer}
+#count{color:var(--mut);margin-left:auto}
+main{flex:1;display:flex;min-height:0}
+#list{width:min(38%,460px);overflow:auto;border-right:1px solid var(--line)}
+#detail{flex:1;overflow:auto;padding:20px 28px}
+.row{padding:8px 14px;border-bottom:1px solid var(--line);cursor:pointer}
+.row:hover{background:var(--sel)}.row.on{background:var(--sel);box-shadow:inset 3px 0 var(--acc)}
+.row .t{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.row .m{color:var(--mut);font-size:12px;margin-bottom:2px}
+.tag{display:inline-block;font-size:12px;padding:1px 8px;border:1px solid var(--line);border-radius:10px;margin:0 6px 6px 0;color:var(--mut)}
+h2{font-size:16px;margin:20px 0 8px}
+.dil{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:12px 16px;white-space:pre-wrap}
+.reply{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:12px 16px;margin-bottom:12px}
+.reply .h{color:var(--mut);font-size:12px;margin-bottom:6px;display:flex;gap:10px;flex-wrap:wrap}
+.reply .h b{color:var(--fg)}
+.reply .b{white-space:pre-wrap}
+details{margin-top:6px}summary{cursor:pointer;color:var(--mut);font-size:12px}
+pre{white-space:pre-wrap;font-size:12px;background:var(--bg);border:1px solid var(--line);border-radius:6px;padding:8px}
+table{border-collapse:collapse;width:100%;background:var(--card);border:1px solid var(--line)}
+td{padding:6px 10px;border-bottom:1px solid var(--line);vertical-align:top}
+td.w{font-variant-numeric:tabular-nums;font-weight:600;width:36px;text-align:right}
+td.d{color:var(--mut);width:130px;white-space:nowrap}
+.pos{color:var(--pos)}.neg{color:var(--neg)}
+.scroll{overflow-x:auto}
+table.ck th{position:sticky;top:0;background:var(--card);font-weight:600;font-size:12px;padding:6px 8px;border-bottom:1px solid var(--line);text-align:center;white-space:nowrap}
+table.ck th a{color:inherit;text-decoration:none}
+table.ck td.crit{min-width:260px;font-size:13px}
+table.ck td.c{text-align:center;width:64px;font-variant-numeric:tabular-nums}
+table.ck td.y{color:var(--pos);font-weight:700}table.ck td.n,table.ck td.na{color:var(--mut)}table.ck td.p{color:var(--acc)}
+table.ck tr.diff td{background:var(--sel)}
+table.ck tr.foot td{font-weight:600;border-top:2px solid var(--line)}
+.note{color:var(--mut);font-size:12px}
+.opts{margin-top:10px;display:grid;gap:6px}
+.opts>div:not(.note){background:var(--card);border:1px solid var(--line);border-radius:8px;padding:8px 12px;display:flex;gap:10px;align-items:center}
+.opts .ab{font-weight:700;color:var(--acc);min-width:14px}
+.opts .sc{margin-left:auto;color:var(--mut);font-size:12px;white-space:nowrap}
+.badge{color:var(--acc)}
+h2 select{font-size:13px;margin-left:8px;font-weight:400}
+a{color:var(--acc)}
+.empty{color:var(--mut);padding:30px}
+@media(max-width:800px){main{flex-direction:column}#list{width:100%;height:40%;border-right:0;border-bottom:1px solid var(--line)}}
+</style>
+</head>
+<body>
+<header>
+  <h1>Experiment runs</h1>
+  <span id="filters"></span>
+  <button id="reload">Reload runs</button>
+  <span id="count"></span>
+</header>
+<main><div id="list"></div><div id="detail"><div class="empty">Select a run.</div></div></main>
+<script src="/clusters.js"></script>
+<script>
+const $=s=>document.querySelector(s);
+const esc=s=>String(s??'').replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+const strip=t=>t.replace(/^(A human user asks an AI:|An AI faces this scenario:)/,'').trim();
+const FILTERS=[['experiment','experiment'],['model','model'],['arm','arm'],['cond','condition']];
+let MB=[],byText={},groups=[],J={},ST={},ITEMS={},filt={},sel=null,judgeSel=null;
+const short=m=>String(m||'').split('/').pop();
+const words=t=>String(t||'').split(/\s+/).filter(Boolean).length;
+
+// Older records lack a dilemma field; recover it from the user message.
+const dilemmaOf=r=>r.dilemma||((r.messages||[]).find(m=>m.role==='user')?.content.match(/^POST:\n([\s\S]*?)\n\n(REPLIES SO FAR:|Write your reply)/)||[])[1]||'';
+
+function group(records){
+  const g={};
+  for(const r of records){
+    r._dilemma=dilemmaOf(r);
+    r._ref=`${r._file}:${r._line}`;
+    r.cond=`disclose=${r.disclose??'?'} · peers=${r.peers??'—'}`;
+    r.experiment=r.experiment||r._file.replace(/\.jsonl$/,'');
+    r.model=r.model_requested||r.model;
+    // Threads group by thread; independent replies group across models so they can be compared.
+    const k=r.thread_id?`thread|${r.thread_id}`:[r._file,r._dilemma,r.arm,r.cond].join('|');
+    (g[k]=g[k]||{key:k,experiment:r.experiment,arm:r.arm||'?',cond:r.cond,dilemma:r._dilemma,thread:r.thread_id,replies:[]}).replies.push(r);
+  }
+  for(const x of Object.values(g)){
+    x.replies.sort((a,b)=>x.thread?(a.position??0)-(b.position??0):a.time-b.time);
+    x.models=[...new Set(x.replies.map(r=>r.model))];
+    x.last=Math.max(...x.replies.map(r=>r.time||0));
+  }
+  return Object.values(g).sort((a,b)=>b.last-a.last);
+}
+const matches=g=>FILTERS.every(([k])=>!filt[k]||(k==='model'?g.models.includes(filt[k]):g[k]===filt[k]));
+function buildFilters(){
+  $('#filters').innerHTML=FILTERS.map(([k,l])=>{
+    const vals=[...new Set(groups.flatMap(g=>k==='model'?g.models:[g[k]]))].sort();
+    return `<select data-k="${k}"><option value="">${l}: all</option>${vals.map(v=>`<option ${filt[k]===v?'selected':''}>${esc(v)}</option>`).join('')}</select> `}).join('');
+  document.querySelectorAll('#filters select').forEach(s=>s.onchange=()=>{filt[s.dataset.k]=s.value;renderList();if(sel)show(sel)});
+}
+function renderList(){
+  const shown=groups.filter(matches);
+  $('#count').textContent=`${shown.length} runs · ${shown.reduce((n,g)=>n+g.replies.length,0)} replies`;
+  $('#list').innerHTML=shown.map(g=>`<div class="row${g.key===sel?' on':''}" data-k="${esc(g.key)}">
+    <div class="m">${esc(g.arm)}${g.thread?' thread':''} · ${g.replies.length} repl${g.replies.length===1?'y':'ies'} · ${g.models.length} model${g.models.length===1?'':'s'} · ${new Date(g.last*1000).toLocaleString()}</div>
+    <div class="t">${esc(g.dilemma)}</div></div>`).join('')||'<div class="empty">No runs yet.</div>';
+  document.querySelectorAll('.row').forEach(e=>e.onclick=()=>show(e.dataset.k));
+}
+// Per reply, the selected judge's runs: applies fraction per criterion, mean score, stances.
+function verdict(r,judge){
+  const runs=(J[r._ref]||[]).filter(j=>j.key===judge&&j.valid);
+  if(!runs.length) return null;
+  const n=runs[0].applies.length, w=runs[0].weights;
+  const frac=[...Array(n)].map((_,i)=>runs.reduce((s,j)=>s+j.applies[i],0)/runs.length);
+  const score=runs.reduce((s,j)=>s+j.applies.reduce((t,a,i)=>t+a*w[i],0),0)/runs.length;
+  return {runs,frac,score,stances:runs.map(j=>j.stance),criteria:runs[0].criteria,weights:w,opts:runs[0].options};
+}
+const stanceOf=r=>{const s=ST[r._ref];return s&&s.length?s.reduce((a,x)=>a+x.stance,0)/s.length:null};
+const fmtStance=v=>v==null?'–':(v>0?'+':'')+(Math.round(v*10)/10);
+// A/B options for a dilemma, from experiments/items.json (keyed by the dilemma's opening words).
+const optionsFor=d=>{const k=Object.keys(ITEMS).find(k=>d.startsWith(k));return k?ITEMS[k]:null};
+function checklist(replies,judge){
+  const V=replies.map(r=>verdict(r,judge));
+  const base=V.find(Boolean); if(!base) return '<p class="empty">No judgments from this judge for these replies.</p>';
+  const max=base.weights.filter(x=>x>0).reduce((a,b)=>a+b,0);
+  const order=base.weights.map((w,i)=>i).sort((a,b)=>base.weights[b]-base.weights[a]);
+  const cell=f=>f==null?'<td class="c na">–</td>':f===1?'<td class="c y">✓</td>':f===0?'<td class="c n">·</td>':`<td class="c p">${Math.round(f*100)}%</td>`;
+  const rows=order.map(i=>{
+    const fs=V.map(v=>v?v.frac[i]:null), known=fs.filter(f=>f!=null);
+    const diff=known.some(f=>f!==known[0]);
+    return `<tr class="${diff?'diff':''}"><td class="w ${base.weights[i]>0?'pos':'neg'}">${base.weights[i]>0?'+':''}${base.weights[i]}</td><td class="crit">${esc(base.criteria[i])}</td>${fs.map(cell).join('')}</tr>`}).join('');
+  const foot=(label,f)=>`<tr class="foot"><td></td><td>${label}</td>${V.map((v,j)=>`<td class="c">${f(v,replies[j])}</td>`).join('')}</tr>`;
+  const nDiff=order.filter(i=>{const k=V.filter(Boolean).map(v=>v.frac[i]);return k.some(f=>f!==k[0])}).length;
+  return `<p class="note">${nDiff} of ${order.length} criteria differ across replies (highlighted). Cells show the share of the judge's runs marking the criterion as applying.</p>
+  <div class="scroll"><table class="ck"><thead><tr><th>W</th><th>Criterion</th>${replies.map((r,j)=>`<th><a href="#reply-${j}">${esc(short(r.model))}</a></th>`).join('')}</tr></thead><tbody>${rows}
+  ${foot(`Score (of ${max})`,v=>v?(Math.round(v.score*10)/10):'–')}
+  ${foot('Stance (−5 A … +5 B)',(v,r)=>fmtStance(stanceOf(r)))}
+  ${foot('Stance (old A/B code)',v=>v?esc([...new Set(v.stances)].join('/')):'–')}
+  ${foot('Words',(v,r)=>words(r.reply))}
+  ${foot('Judge runs',v=>v?v.runs.length:0)}</tbody></table></div>`;
+}
+function show(k){
+  sel=k;renderList();
+  const g=groups.find(x=>x.key===k); if(!g) return;
+  const replies=g.replies.filter(r=>!filt.model||r.model===filt.model);
+  const mi=byText[g.dilemma], mb=MB[mi];
+  const judges=[...new Set(replies.flatMap(r=>(J[r._ref]||[]).map(j=>j.key)))].sort((a,b)=>(a.endsWith('|neutral')?0:1)-(b.endsWith('|neutral')?0:1)||a.localeCompare(b));
+  if(!judges.includes(judgeSel)) judgeSel=judges.includes('openai/gpt-6.1-sol|neutral')?'openai/gpt-6.1-sol|neutral':judges[0];
+  const cost=replies.reduce((s,r)=>s+(r.usage?.cost||0),0)+replies.reduce((s,r)=>s+(J[r._ref]||[]).reduce((t,j)=>t+(j.usage?.cost||0),0),0);
+  $('#detail').innerHTML=`<div><span class="tag">${esc(g.experiment)}</span><span class="tag">${esc(g.arm)}</span><span class="tag">${esc(g.cond)}</span><span class="tag">${replies.length} replies · ${g.models.length} models</span><span class="tag">$${cost.toFixed(4)} incl. judging</span>
+    ${mb?`<a class="tag" href="http://localhost:8007/#mb/${mi}" target="_blank">open in dataset viewer ↗</a>`:''}</div>
+    <h2>Dilemma</h2><div class="dil">${esc(g.dilemma)}</div>
+    ${(o=>o?`<div class="opts"><div><span class="ab">A</span>${esc(o.option_a)}<span class="sc">stance −5</span></div><div><span class="ab">B</span>${esc(o.option_b)}<span class="sc">stance +5</span></div><div class="note" style="margin:4px 0 0">Stance scale: −5 strongly favors A · 0 neither / balanced middle path · +5 strongly favors B</div><div id="spectrum"></div></div>`:'<p class="note">No A/B options defined in experiments/items.json for this dilemma.</p>')(optionsFor(g.dilemma))}
+    ${judges.length?'<h2>Theory profile</h2><div id="radar"></div>':''}
+    <h2>Checklist ${judges.length?`<select id="judge">${judges.map(j=>`<option value="${esc(j)}" ${j===judgeSel?'selected':''}>${esc(short(j.split('|')[0]))} · ${esc(j.split('|')[1])} rubric</option>`).join('')}</select>`:''}</h2>
+    ${judges.length?checklist(replies,judgeSel):'<p class="empty">No judgments yet.</p>'}
+    ${judges.length?'<h2>Clusters</h2><div id="clusters"></div>':''}
+    <h2>Replies</h2>${replies.map((r,i)=>{const v=judgeSel&&verdict(r,judgeSel);return `<div class="reply" id="reply-${i}"><div class="h"><b>${esc(short(r.model))}</b>${g.thread?`<span>position ${r.position??i+1}</span>`:''}<span>${words(r.reply)} words</span><span>${r.provider?`via ${esc(r.provider)}`:''}</span><span>${r.usage?.completion_tokens??'?'} tokens · $${(r.usage?.cost||0).toFixed(4)}</span>${v?`<span class="badge">score ${Math.round(v.score*10)/10} · stance ${fmtStance(stanceOf(r))}</span>`:''}</div>
+      <div class="b">${esc(r.reply)}</div>
+      <details><summary>prompt</summary>${(r.messages||[]).map(m=>`<pre><b>${m.role}</b>\n${esc(m.content)}</pre>`).join('')}</details>
+      ${(J[r._ref]||[]).length?`<details><summary>judge reasoning (${J[r._ref].length})</summary>${J[r._ref].map(j=>`<pre><b>${esc(j.judge)} · ${esc(j.rubric)} rubric #${j.repeat} · stance ${esc(j.stance)}</b>\n${esc(j.reasoning||'(no reasoning returned)')}</pre>`).join('')}</details>`:''}</div>`}).join('')}`;
+  $('#judge')?.addEventListener('change',e=>{judgeSel=e.target.value;show(k)});
+  if($('#spectrum')){const lab=replies.map(r=>short(r.model)),c={};lab.forEach(l=>c[l]=(c[l]||0)+1);const n={};renderSpectrum($('#spectrum'),lab.map(l=>c[l]>1?`${l} #${n[l]=(n[l]||0)+1}`:l),replies.map(stanceOf),optionsFor(g.dilemma))}
+  if($('#clusters')){
+    const judged=replies.map(r=>[r,verdict(r,judgeSel)]).filter(([,v])=>v);
+    const counts={};const labels=judged.map(([r])=>{const s=short(r.model);counts[s]=(counts[s]||0)+1;return s});
+    const seen={};const uniq=judged.map(([r],i)=>counts[labels[i]]>1?`${labels[i]} #${seen[labels[i]]=(seen[labels[i]]||0)+1}`:labels[i]);
+    const base=judged[0]?.[1];
+    if(base) renderClusters($('#clusters'),uniq,judged.map(([,v])=>v.frac),base.criteria,base.weights);
+    else $('#clusters').innerHTML='<p class="note">No judgments from this judge.</p>';
+    // Radar uses the selected judge across all rubrics it scored, for the same replies.
+    const judgeName=judgeSel.split('|')[0];
+    const pct=(r,rub)=>{const v=verdict(r,`${judgeName}|${rub}`);if(!v)return undefined;const mx=v.weights.filter(x=>x>0).reduce((a,b)=>a+b,0);return 100*v.score/mx};
+    renderRadar($('#radar'),uniq,judged.map(([r])=>Object.fromEntries(RADAR_AXES.map(([k])=>[k,pct(r,k)]))),judged.map(([r])=>stanceOf(r)),optionsFor(g.dilemma));
+  }
+}
+async function load(){
+  const [runs,judg,st,items]=await Promise.all([fetch('/api/runs').then(r=>r.json()),fetch('/api/judgments').then(r=>r.json()),fetch('/api/stances').then(r=>r.json()),fetch('/api/items').then(r=>r.json())]);
+  ITEMS=items;
+  ST={};for(const s of st)if(s.valid)(ST[s.reply_ref]=ST[s.reply_ref]||[]).push(s);
+  J={};for(const j of judg){j.rubric=j.rubric||'neutral';j.key=`${j.judge}|${j.rubric}`;(J[j.reply_ref]=J[j.reply_ref]||[]).push(j)}
+  groups=group(runs);
+  buildFilters();renderList();if(sel)show(sel);
+}
+$('#reload').onclick=load;
+fetch('/data.json').then(r=>r.json()).then(d=>{MB=d.mb;MB.forEach((m,i)=>byText[strip(m.text)]=i);load()});
+</script>
+</body>
+</html>
