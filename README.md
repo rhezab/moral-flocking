@@ -2,6 +2,10 @@
 
 Opinion cascades and flocking in moral reasoning among LLM collectives (hackathon submission).
 
+**Authors:** [@rhezab](https://github.com/rhezab) and Jacob Shkrob
+
+> **Disclaimer:** work in progress, built for a hackathon with substantial AI assistance (code, analysis and write-up). Results come from single runs per condition and an LLM stance coder/judge; treat them as preliminary.
+
 Twelve models (two per lab from Anthropic, OpenAI, xAI, Alibaba, DeepSeek, Zhipu) answer a MoReBench moral dilemma alone, then for three rounds either discuss it in a shared forum (simultaneous, anonymous "Agent N" posts) or reflect alone (control). Private answers are stance-coded (-5 option A … +5 option B) and judged against MoReBench rubrics. Follow-ups add planted persuaders (Claude Sonnet 5.5 briefed to argue one side) and skewed starting populations.
 
 **Findings report:** `reports/report.html` · **Interactive explorer:** `reports/dilemmas.html` · **Transcript notes:** `reports/transcript_notes.md`
