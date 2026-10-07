@@ -4,6 +4,7 @@
 # large raw run data (stances/judgments/transcripts as JSONL)
 runs/
 *.jsonl
+!data/natural/**/*.jsonl
 *.db
 # misc
 __pycache__/
