@@ -1,19 +1,32 @@
-# Swarmchasing: do language models flock?
+# An exploration of the "moral flocking" hypothesis
 
-Opinion cascades and flocking in moral reasoning among LLM collectives (hackathon submission).
+**Do AI groups tend towards moral consensus?**
 
-**Authors:** [@rhezab](https://github.com/rhezab) and Jacob Shkrob
+By [Rheza Budiono](https://rhezab.github.io) ([@rhezab](https://github.com/rhezab)) & [Jacob Shkrob](https://shkroby.github.io) ([@shkroby](https://github.com/shkroby)) for the [AI Swarm Dynamics Hackathon](https://swarmchasing.com).
 
-> **Disclaimer:** work in progress, built for a hackathon with substantial AI assistance (code, analysis and write-up). Results come from single runs per condition and an LLM stance coder/judge; treat them as preliminary.
+**Write-up: [Moral Flocking (Google Doc)](https://docs.google.com/document/d/1YksK94lv16rP_Wk0vDqtKcQo9EURY3ARCyXUiygQuLA/edit?tab=t.0#heading=h.4wci1qdmmzj2)** · [Transcript explorer](https://claude.ai/artifact/D3zHr3nZ3ThTSF2cThwMbp) · [Static report](https://claude.ai/artifact/QLnBoJSz5UKQ7CEQrhELXW) · [Interactive report](https://claude.ai/artifact/NFbrzMjpbywHQEZUr6AQQ6)
 
-Twelve models (two per lab from Anthropic, OpenAI, xAI, Alibaba, DeepSeek, Zhipu) answer a MoReBench moral dilemma alone, then for three rounds either discuss it in a shared forum (simultaneous, anonymous "Agent N" posts) or reflect alone (control). Private answers are stance-coded (-5 option A … +5 option B) and judged against MoReBench rubrics. Follow-ups add planted persuaders (Claude Sonnet 5.5 briefed to argue one side) and skewed starting populations.
+> **About the write-ups.** The Google Doc write-up is human-written by the authors. Most other write-ups in this repo — this README, the report pages (`reports/*.html`), `reports/transcript_notes.md`, `forum-insights.md`, `discussion-design.md` and `morebench-threads.md` — were written by Claude or with substantial Claude assistance, as was much of the code and analysis. This is work in progress built for a hackathon: results come from single runs per condition and an LLM judge, so treat them as preliminary.
 
-**Findings report:** `reports/report.html` · **Interactive explorer:** `reports/dilemmas.html` · **Transcript notes:** `reports/transcript_notes.md`
+## Summary
 
-Key results (one run per condition):
-- Discussion makes views converge: stance dispersion falls in the forum and ends lower than in control in all four dilemmas.
-- Covert medication: a 6:6 split ends 10:1 for refusing; Claude Opus 5.5 switches after the first round, crediting two peers' arguments. The safeguards stay; the default flips.
-- Steering: covert medication is robust to plants and skewed majorities; pandemic research is moderated toward neutral but not reversed.
+The **moral flocking hypothesis**: (LLM assistant) AIs interacting with each other will tend toward swarm-like moral consensus, even when the AIs are different models from different providers.
+
+We took four binary moral dilemmas from [MoReBench](https://morebench.github.io/) and had 12 AIs (different models) discuss each over three rounds of forum discussion. We found that:
+- AIs tended toward consensus in the forum condition, but not in the control condition.
+- In the "covert medication" dilemma, an initially split room ends in consensus.
+- On the same dilemma, Claude Opus switched sides, convinced by other AIs.
+- Collective opinion was fairly robust to two steering interventions: over-representation of one side, and planted persuaders.
+
+## Experiment design
+- **Models:** 12 models from 6 providers, a higher-end and a lower-end model from each (OpenAI, xAI, Anthropic, DeepSeek, Zhipu, Qwen).
+- **Forum:** three rounds of public discussion (posts ≤ 150 words). Posting is simultaneous: in round N, each AI sees only posts from rounds before N.
+- **Private opinions:** each AI gives a private opinion before discussion and after each round (≤ 250 words), seen by no other AI.
+- **Reasoning:** before every post and private opinion, AIs may reason privately (capped at 500 tokens).
+- **Judge:** an LLM judge (gpt-6.1-sol) codes each private opinion for stance (−5 option A … +5 option B, coded three times and averaged) and for which MoReBench rubric criteria it meets (a neutral rubric and/or moral-theory rubrics, depending on the dilemma).
+- **Conditions:** *control* (each AI "discusses" only with itself, re-reading its own answers), *forum*, *over-represent* (extra copies of AIs on one side) and *planted* (persuaders instructed to push one side).
+
+Prompts are in the Google Doc appendix and in `discussion.py`, `stance.py` and `judge.py`.
 
 ## Code
 - `discussion.py` — runs round 0, control and forum (simultaneous posting, skewed populations `--skew`, planted agents `--plant`)
