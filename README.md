@@ -6,7 +6,7 @@ By [Rheza Budiono](https://rhezab.github.io) ([@rhezab](https://github.com/rheza
 
 **Write-up: [Moral Flocking (Google Doc)](https://docs.google.com/document/d/1YksK94lv16rP_Wk0vDqtKcQo9EURY3ARCyXUiygQuLA/edit?tab=t.0#heading=h.4wci1qdmmzj2)** · [Transcript explorer](https://claude.ai/artifact/D3zHr3nZ3ThTSF2cThwMbp) · [Static report](https://claude.ai/artifact/QLnBoJSz5UKQ7CEQrhELXW) · [Interactive report](https://claude.ai/artifact/NFbrzMjpbywHQEZUr6AQQ6)
 
-> **AI use statement:** The Google Doc write-up is human-written by the authors. Most other write-ups in this repo — this README, the report pages and transcript explorer (`reports/*.html`), `reports/transcript_notes.md`, `forum-insights.md`, `discussion-design.md` and `morebench-threads.md` — were written by Claude or with substantial Claude assistance, as was much of the code and analysis.
+> **AI use statement:** The Google Doc write-up is human-written by the authors. Most other write-ups in this repo — this README, the report pages and transcript explorer (`reports/*.html`), `reports/transcript_notes.md`, `forum-insights.md`, `discussion-design.md` and `morebench-threads.md` — were written by Claude or with substantial Claude assistance, as was much of the code and analysis, in each case with substantial input and direction from the authors.
 
 > **Status:** work in progress, built for a hackathon. Results come from single runs per condition and an LLM judge; treat them as preliminary.
 
