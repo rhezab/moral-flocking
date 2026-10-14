@@ -1,0 +1,296 @@
+<title>Forum Transcripts</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,500;1,6..72,400&display=swap">
+<style>
+/* Layout: sticky control bar; roster rail on the left (chips on phones); transcript column reads like a thread, grouped by phase. */
+:root{
+  --bg:#fbfbf9; --surface:#ffffff; --ink:#1c1f1d; --muted:#636b65; --rule:#e2e5e1; --faint:#f0f2ef;
+  --a:#2f6e9e; --b:#b4582c; --a-soft:#e6eff6; --b-soft:#f7ebe4; --mark:#fff1a8;
+  --mid:#bfc3bf;
+  --sans:"IBM Plex Sans",system-ui,sans-serif; --mono:"IBM Plex Mono",ui-monospace,monospace; --read:"Newsreader",Georgia,serif;
+}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){
+  --bg:#121513; --surface:#1a1e1b; --ink:#e6e9e6; --muted:#9aa29c; --rule:#2c322e; --faint:#212622;
+  --a:#6aa7d6; --b:#e08a5f; --a-soft:#1c2a35; --b-soft:#33231b; --mark:#5b4f12;
+  --mid:#5e6561; color-scheme:dark}}
+:root[data-theme="dark"]{
+  --bg:#121513; --surface:#1a1e1b; --ink:#e6e9e6; --muted:#9aa29c; --rule:#2c322e; --faint:#212622;
+  --a:#6aa7d6; --b:#e08a5f; --a-soft:#1c2a35; --b-soft:#33231b; --mark:#5b4f12;
+  --mid:#5e6561; color-scheme:dark}
+*{box-sizing:border-box}
+body{background:var(--bg);color:var(--ink);font:15px/1.5 var(--sans);padding-inline:16px;padding-block:0 80px}
+.wrap{max-width:1180px;margin:0 auto}
+header.top{padding-block:28px 12px}
+h1{font:600 26px/1.2 var(--sans);letter-spacing:-.01em;margin:0 0 4px;text-wrap:balance}
+.sub{color:var(--muted);margin:0;max-width:70ch}
+.bar{position:sticky;top:env(safe-area-inset-top,0px);z-index:5;background:var(--bg);border-bottom:1px solid var(--rule);
+  padding-block:10px;display:flex;flex-wrap:wrap;gap:8px 16px;align-items:center}
+.grp{display:flex;flex-direction:column;gap:3px;min-width:0}
+.grp .seg{flex-wrap:wrap}
+.seg{display:inline-flex;border:1px solid var(--rule);border-radius:7px;overflow:hidden;background:var(--surface)}
+.seg button{font:500 13px var(--sans);color:var(--muted);background:none;border:0;padding:6px 11px;cursor:pointer}
+.seg button+button{border-left:1px solid var(--rule)}
+.seg button[aria-pressed="true"]{background:var(--ink);color:var(--bg)}
+.seg button:focus-visible,.chip:focus-visible,input:focus-visible,.ref:focus-visible{outline:2px solid var(--a);outline-offset:2px}
+.search{flex:1 1 200px;min-width:0;display:flex;align-self:flex-end}
+.search input{width:100%;font:14px var(--sans);color:var(--ink);background:var(--surface);border:1px solid var(--rule);border-radius:7px;padding:6px 10px}
+.lbl{font:500 11px var(--sans);letter-spacing:.06em;text-transform:uppercase;color:var(--muted)}
+
+details.dil{margin-block:16px 4px;background:var(--surface);border:1px solid var(--rule);border-radius:8px}
+details.dil summary{cursor:pointer;padding:12px 14px;display:flex;flex-wrap:wrap;gap:6px 14px;align-items:baseline}
+details.dil summary b{font-weight:600}
+details.dil summary::-webkit-details-marker{display:none}
+details.dil summary{list-style:none}
+.tog{margin-left:auto;font:500 13px var(--sans);color:var(--ink);border:1px solid var(--rule);border-radius:6px;padding:4px 10px;background:var(--faint);white-space:nowrap}
+.tog::after{content:"";display:inline-block;width:6px;height:6px;margin-left:8px;border-right:1.5px solid currentColor;border-bottom:1.5px solid currentColor;transform:translateY(-2px) rotate(45deg)}
+details.dil[open] .tog::after{transform:translateY(1px) rotate(-135deg)}
+details.dil summary:hover .tog{border-color:var(--ink)}
+details.dil[open] summary{border-bottom:1px solid var(--rule);margin-bottom:12px}
+.opt{font-size:13.5px;display:flex;gap:6px;align-items:baseline;min-width:0}
+.opt .k{font:600 11px var(--mono);padding:1px 5px;border-radius:4px}
+.ka{background:var(--a-soft);color:var(--a)} .kb{background:var(--b-soft);color:var(--b)}
+.diltext{padding:0 14px 14px;font:16px/1.6 var(--read);max-width:75ch;white-space:pre-wrap}
+
+.note{color:var(--muted);font-size:12.5px}
+.main{display:grid;grid-template-columns:240px minmax(0,1fr);gap:28px;margin-top:18px}
+.rail{position:sticky;top:calc(var(--barh,120px) + 10px);align-self:start;max-height:calc(100vh - var(--barh,120px) - 20px);overflow:auto}
+.rail .lbl{display:block;margin-bottom:6px}
+.roster{display:flex;flex-direction:column;gap:2px}
+.med{display:flex;flex-direction:column;gap:6px;padding:6px 7px 8px;margin-bottom:4px;border-bottom:1px solid var(--rule)}
+.srow{display:grid;grid-template-columns:minmax(0,1fr) 64px;gap:0 8px;align-items:center;font:600 13px var(--sans)}
+.srow .vals{grid-column:1/-1;font:11px var(--mono);color:var(--muted);font-weight:400;font-variant-numeric:tabular-nums}
+.chip{display:grid;grid-template-columns:minmax(0,1fr) 64px;gap:8px;align-items:center;text-align:left;
+  font:13px var(--sans);color:var(--ink);background:none;border:1px solid transparent;border-radius:6px;padding:5px 7px;cursor:pointer}
+.chip:hover{background:var(--faint)}
+.chip[aria-pressed="true"]{background:var(--surface);border-color:var(--ink)}
+.chip .nm{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.spark{display:block}
+.hint{color:var(--muted);font-size:12px;margin-top:10px;line-height:1.45}
+.legend{display:flex;gap:10px;align-items:center;font-size:12px;color:var(--muted);margin-top:10px;flex-wrap:wrap}
+
+.phase{margin-bottom:26px;scroll-margin-top:calc(var(--barh,120px) + 10px)}
+.tl{flex:1 1 100%;display:flex;align-items:stretch;overflow-x:auto;padding-block:2px;min-width:0}
+.tl button{flex:1 0 76px;position:relative;display:flex;flex-direction:column;align-items:center;gap:1px;background:none;border:0;padding:16px 2px 2px;cursor:pointer;color:var(--muted);font:500 12px var(--sans)}
+.tl button::before{content:"";position:absolute;top:7px;left:0;right:0;height:2px;background:var(--rule)}
+.tl button:first-child::before{left:50%} .tl button:last-child::before{right:50%}
+.tl button::after{content:"";position:absolute;top:2px;left:50%;width:12px;height:12px;margin-left:-6px;border-radius:50%;background:var(--surface);border:2px solid var(--muted);box-sizing:border-box}
+.tl button.pub::after{border-radius:2px}
+.tl button.on{color:var(--ink)} .tl button.on::after{background:var(--ink);border-color:var(--ink)}
+.tl button:disabled{opacity:.35;cursor:default}
+.tl button:not(:disabled):hover{color:var(--ink)}
+.tl button:focus-visible{outline:2px solid var(--a);outline-offset:-2px;border-radius:4px}
+.tl .m{font:11px var(--mono);font-variant-numeric:tabular-nums}
+.phase h2{font:600 13px var(--sans);letter-spacing:.05em;text-transform:uppercase;color:var(--muted);margin:0 0 10px;
+  display:flex;flex-wrap:wrap;gap:4px 12px;align-items:baseline;border-bottom:1px solid var(--rule);padding-bottom:6px}
+.phase h2 .mean{font:500 12px var(--mono);text-transform:none;letter-spacing:0}
+.cards{display:flex;flex-direction:column;gap:10px}
+.card{background:var(--surface);border:1px solid var(--rule);border-radius:8px;padding:12px 16px 14px;min-width:0}
+.card.post{border-left:3px solid var(--ink)}
+.card header{display:flex;flex-wrap:wrap;gap:4px 10px;align-items:center;margin-bottom:6px}
+.card .who{font-weight:600;font-size:14px;display:flex;align-items:center;gap:6px}
+.card .meta{font:12px var(--mono);color:var(--muted)}
+.st{font:600 12px var(--mono);padding:2px 7px;border-radius:999px;margin-left:auto;font-variant-numeric:tabular-nums;white-space:nowrap}
+.st{background:var(--faint);color:var(--ink)}
+.st i{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:5px;vertical-align:0}
+.grad{display:inline-block;width:110px;height:8px;border-radius:4px;background:linear-gradient(90deg,var(--a),var(--mid),var(--b))}
+.body{font:16px/1.6 var(--read);max-width:72ch;overflow-wrap:anywhere}
+.body p{margin:0 0 .7em} .body p:last-child{margin:0}
+.cot{margin-top:10px;border-top:1px dashed var(--rule);padding-top:8px;font-size:13px;color:var(--muted)}
+.cot summary{cursor:pointer;font:500 12.5px var(--sans);color:var(--muted)}
+.cot summary:hover{color:var(--ink)}
+.cot.none{font:12px var(--sans)}
+.cotbody{margin-top:8px;padding:10px 12px;background:var(--faint);border-radius:6px;font:13px/1.55 var(--mono);color:var(--ink);overflow-wrap:anywhere;max-width:80ch}
+.cotbody p{margin:0 0 .6em} .cotbody p:last-child{margin:0}
+.ref{font:500 13px var(--sans);background:var(--faint);border-radius:4px;padding:0 4px;cursor:pointer;white-space:nowrap;border:0;color:var(--ink)}
+mark{background:var(--mark);color:inherit;border-radius:2px}
+.empty{color:var(--muted);padding:30px 0}
+details.prompts{margin-top:40px;border-top:1px solid var(--rule);padding-top:14px}
+details.prompts summary{cursor:pointer;font-weight:600}
+.pr{margin-top:14px} .pr h3{font:600 12px var(--mono);margin:0 0 4px;color:var(--muted)}
+.pr pre{font:12.5px/1.5 var(--mono);background:var(--surface);border:1px solid var(--rule);border-radius:6px;padding:10px 12px;white-space:pre-wrap;overflow-wrap:anywhere;margin:0}
+
+@media (max-width:820px){
+  .main{grid-template-columns:minmax(0,1fr);gap:14px}
+  .rail{position:static;max-height:none;overflow:visible}
+  .roster{flex-direction:row;overflow-x:auto;gap:6px;padding-bottom:4px}
+  .chip{grid-template-columns:auto;flex:none;border-color:var(--rule)}
+  .chip .spark{display:none}
+}
+@media (prefers-reduced-motion:no-preference){.card{transition:border-color .15s}}
+</style>
+
+<div class="wrap">
+  <header class="top">
+    <h1>Forum Transcripts</h1>
+    <p class="sub">Every private answer and forum post from the natural runs: 12 models, three rounds of discussion after a shared round-0 answer. In posts and answers, “Agent N” labels are replaced with the model behind them, shown as tags.</p>
+  </header>
+
+  <div class="bar" id="bar" role="toolbar" aria-label="Filters">
+    <div class="grp"><span class="lbl" id="l-dils">Dilemma</span><div class="seg" id="dils" role="group" aria-labelledby="l-dils"></div></div>
+    <div class="grp"><span class="lbl" id="l-conds">Condition</span><div class="seg" id="conds" role="group" aria-labelledby="l-conds">
+      <button id="c-forum" data-c="forum">Forum</button><button id="c-control" data-c="control">Control</button>
+    </div></div>
+    <div class="grp" id="kindgrp"><span class="lbl" id="l-kinds">Opinion</span><div class="seg" id="kinds" role="group" aria-labelledby="l-kinds">
+      <button id="k-all" data-k="all">All</button><button id="k-public" data-k="public">Public</button><button id="k-private" data-k="private">Private</button>
+    </div></div>
+    <label class="search"><span class="lbl" style="position:absolute;left:-9999px">Search</span>
+      <input id="q" type="search" placeholder="Search text, e.g. injectable" autocomplete="off"></label>
+    <nav class="tl" id="tl" aria-label="Jump to round"></nav>
+  </div>
+
+  <details class="dil" id="dil"><summary></summary><div class="diltext"></div></details>
+
+
+  <div class="main">
+    <aside class="rail">
+      <span class="lbl">Stance by round · private, R0→R3</span>
+      <div class="med" id="med"></div>
+      <div class="roster" id="roster"></div>
+      <div class="legend"><span style="color:var(--a)">A −5</span><span class="grad"></span><span style="color:var(--b)">+5 B</span></div>
+      <p class="hint">Each card can expand to the model’s hidden reasoning, which no other agent saw. Some providers return only a summary (the groks, gpt-6-luna, likely Opus); gpt-6.1-sol returns none. Reasoning was capped at 500 tokens, which some providers treat as a soft limit.</p>
+      <p class="hint">Click a model to follow it alone. Click a model tag inside a post to jump to that model. Stance is the mean of three LLM codings.</p>
+    </aside>
+    <main id="feed"></main>
+  </div>
+
+  <details class="prompts"><summary>How agents were prompted</summary><div id="prompts"></div></details>
+</div>
+
+<script>
+const DATA=/*DATA*/;
+const S={d:0,c:'forum',k:'all',m:null,q:''};
+try{const s=JSON.parse(localStorage.getItem('tx2')||'{}');if(s.d<DATA.dilemmas.length)S.d=s.d;if(s.c)S.c=s.c;}catch(e){}
+const $=id=>document.getElementById(id);
+const esc=s=>s.replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+let TK={};const tokens=()=>{const s=getComputedStyle(document.documentElement),g=n=>s.getPropertyValue(n).trim();TK={a:g('--a'),b:g('--b'),mid:g('--mid')};};
+const rgb=x=>{x=x.replace('#','');if(x.length===3)x=[...x].map(c=>c+c).join('');return [0,2,4].map(i=>parseInt(x.slice(i,i+2),16))};
+// Diverging stance colour: option A (−5) through neutral grey (0) to option B (+5).
+const divC=v=>{const t=Math.min(1,Math.abs(v)/5),m=rgb(TK.mid),e=rgb(v<0?TK.a:TK.b);return `rgb(${m.map((x,i)=>Math.round(x+(e[i]-x)*t)).join(',')})`};
+const D=()=>DATA.dilemmas[S.d];
+const fmt=v=>v==null?'—':(v>0?'+':v<0?'−':'')+Math.abs(v).toFixed(1);
+
+function sparkSD(vals){
+  const w=64,h=18,x=i=>4+i*(w-8)/3,y=v=>h-2-v*(h-4)/5;
+  const pts=vals.map((v,i)=>v==null?null:[x(i),y(v)]).filter(Boolean);
+  return `<svg class="spark" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}" aria-hidden="true">
+    <line x1="0" x2="${w}" y1="${h-2}" y2="${h-2}" style="stroke:var(--rule)"/>
+    <polyline points="${pts.map(p=>p.join(',')).join(' ')}" fill="none" style="stroke:var(--muted)" stroke-width="1.2"/>
+    ${pts.map(p=>`<circle cx="${p[0]}" cy="${p[1]}" r="2.4" style="fill:var(--ink)"/>`).join('')}</svg>`;
+}
+function spark(vals){
+  const w=64,h=18,x=i=>4+i*(w-8)/3,y=v=>h/2-v*(h/2-2)/5;
+  const pts=vals.map((v,i)=>v==null?null:[x(i),y(v)]).filter(Boolean);
+  return `<svg class="spark" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}" aria-hidden="true">
+    <line x1="0" x2="${w}" y1="${h/2}" y2="${h/2}" style="stroke:var(--rule)"/>
+    <polyline points="${pts.map(p=>p.join(',')).join(' ')}" fill="none" style="stroke:var(--muted)" stroke-width="1.2"/>
+    ${vals.map((v,i)=>v==null?'':`<circle cx="${x(i)}" cy="${y(v)}" r="2.6" style="fill:${divC(v)}"/>`).join('')}</svg>`;
+}
+
+function cotHTML(e,q){
+  const tok=e.rt?`${e.rt.toLocaleString()} tokens`:'';
+  if(!e.r)return `<div class="cot none">Hidden reasoning: no text returned${tok?` (${tok} used)`:''}</div>`;
+  const open=q&&e.r.toLowerCase().includes(q)&&!e.t.toLowerCase().includes(q);
+  return `<details class="cot"${open?' open':''}><summary>Hidden reasoning${tok?` · ${tok}`:''}</summary><div class="cotbody">${textHTML(e.r)}</div></details>`;
+}
+function textHTML(t){
+  const d=D(),q=S.q.trim();
+  let h=esc(t);
+  if(q){const re=new RegExp(q.replace(/[.*+?^${}()|[\]\\]/g,'\\$&'),'gi');h=h.replace(re,m=>`<mark>${m}</mark>`);}
+  h=h.replace(/\[\[([^\]]+)\]\]/g,(_,n)=>{const i=d.models.indexOf(n.replace(/<\/?mark>/g,''));
+    return `<button class="ref" data-m="${i}">${n}</button>`;});
+  return h.split(/\n\s*\n/).map(p=>`<p>${p.replace(/\n/g,'<br>')}</p>`).join('');
+}
+
+function renderTop(){
+  const d=D();
+  $('dils').innerHTML=DATA.dilemmas.map((x,i)=>`<button id="d-${i}" data-d="${i}" aria-pressed="${i===S.d}">${x.name}</button>`).join('');
+  document.querySelectorAll('#conds button').forEach(b=>b.setAttribute('aria-pressed',b.dataset.c===S.c));
+  document.querySelectorAll('#kinds button').forEach(b=>b.setAttribute('aria-pressed',b.dataset.k===S.k));
+  $('kindgrp').hidden=S.c!=='forum';
+  $('dil').querySelector('summary').innerHTML=`<b>${d.name}</b>
+    <span class="opt"><span class="k ka">A</span>${esc(d.a)}</span><span class="opt"><span class="k kb">B</span>${esc(d.b)}</span>
+    <span class="tog"></span>`;
+  $('dil').querySelector('.tog').textContent=$('dil').open?'Hide dilemma':'Read the dilemma';
+  $('dil').querySelector('.diltext').textContent=d.dilemma;
+  const E=d.conds[S.c].entries;
+  const P=[0,1,2,3].map(k=>E.filter(e=>e.k===k&&e.kind==='private'&&e.st!=null).map(e=>e.st));
+  const avg=a=>a.length?a.reduce((s,x)=>s+x,0)/a.length:null;
+  const mn=P.map(avg),sd=P.map((a,k)=>a.length?Math.sqrt(avg(a.map(x=>(x-mn[k])**2))):null);
+  const row=(label,sp,vals,f,tip)=>`<div class="srow" title="${tip}"><span>${label}</span>${sp}<span class="vals">${vals.map((v,k)=>`R${k} ${f(v)}`).join(' · ')}</span></div>`;
+  $('med').innerHTML=row('Group mean',spark(mn),mn,fmt,'Mean private stance across the 12 models')
+    +row('Dispersion (SD)',sparkSD(sd),sd,v=>v==null?'—':v.toFixed(1),'Standard deviation of private stance across the 12 models (0 = full agreement)');
+  $('roster').innerHTML=d.models.map((m,i)=>{
+    const st=[0,1,2,3].map(k=>(E.find(e=>e.m===i&&e.k===k&&e.kind==='private')||{}).st);
+    return `<button class="chip" data-m="${i}" aria-pressed="${S.m===i}" title="${m}: ${st.map(fmt).join(' → ')}">
+      <span class="nm">${m}</span>${spark(st)}</button>`;}).join('');
+}
+
+function renderTimeline(present){
+  const C=D().conds[S.c],ph=[[0,'private']];
+  for(let k=1;k<=3;k++){if(S.c==='forum')ph.push([k,'public']);ph.push([k,'private']);}
+  $('tl').innerHTML=ph.map(([k,kind])=>{const v=C.entries.filter(e=>e.k===k&&e.kind===kind&&e.st!=null).map(e=>e.st);
+    const m=v.reduce((s,x)=>s+x,0)/v.length,id=`ph-${k}-${kind}`;
+    return `<button class="${kind==='public'?'pub':''}" data-ph="${id}" ${present.has(id)?'':'disabled'} title="Round ${k} ${kind==='public'?'public posts':'private answers'}, group mean ${fmt(m)}">
+      <span>R${k} · ${kind==='public'?'Public':'Private'}</span><span class="m">${fmt(m)}</span></button>`;}).join('');
+  spy();
+}
+function spy(){
+  const bh=$('bar').offsetHeight;document.documentElement.style.setProperty('--barh',bh+'px');
+  let cur=null;document.querySelectorAll('.phase').forEach(s=>{if(s.getBoundingClientRect().top<=bh+30)cur=s.id;});
+  if(!cur){const f=document.querySelector('.phase');cur=f&&f.id;}
+  document.querySelectorAll('.tl button').forEach(b=>b.classList.toggle('on',b.dataset.ph===cur));
+}
+let raf;addEventListener('scroll',()=>{cancelAnimationFrame(raf);raf=requestAnimationFrame(spy);},{passive:true});
+addEventListener('resize',spy);
+
+function renderFeed(){
+  const d=D(),C=d.conds[S.c],q=S.q.trim().toLowerCase();
+  const E=C.entries.filter(e=>(S.m==null||e.m===S.m)&&(S.c!=='forum'||S.k==='all'||e.kind===S.k)
+    &&(!q||e.t.toLowerCase().includes(q)||(e.r&&e.r.toLowerCase().includes(q))||d.models[e.m].toLowerCase().includes(q)));
+  const groups=[];
+  for(const e of E){const key=e.k+e.kind;let g=groups[groups.length-1];if(!g||g.key!==key)groups.push(g={key,k:e.k,kind:e.kind,es:[]});g.es.push(e);}
+  renderTimeline(new Set(groups.map(g=>`ph-${g.k}-${g.kind}`)));
+  if(!groups.length){$('feed').innerHTML='<p class="empty">Nothing matches. Clear the search or pick another model.</p>';return;}
+  setTimeout(spy,0);
+  $('feed').innerHTML=groups.map(g=>{
+    const all=C.entries.filter(e=>e.k===g.k&&e.kind===g.kind&&e.st!=null);
+    const mean=all.reduce((s,e)=>s+e.st,0)/all.length;
+    const sub=t=>`<span class="lbl" style="letter-spacing:0;text-transform:none">${t}</span>`;
+    const seen=g.k===1?'no earlier posts existed':g.k===2?'each agent saw only the round 1 posts':`each agent saw only posts from rounds 1–${g.k-1}`;
+    const title=g.kind==='public'?`Round ${g.k} · public posts ${sub(`written simultaneously, so ${seen}; listed in the shared random order later agents saw`)}`
+      :g.k===0?`Round 0 · private answers ${sub('written alone, same start for both conditions')}`
+      :S.c==='forum'?`Round ${g.k} · private answers ${sub(`written after reading all posts through round ${g.k}`)}`
+      :`Round ${g.k} · private answers ${sub('re-reading only its own earlier answers')}`;
+    return `<section class="phase" id="ph-${g.k}-${g.kind}"><h2>${title}<span class="mean">group mean ${fmt(mean)}</span></h2><div class="cards">${g.es.map(e=>`
+      <article class="card ${e.kind==='public'?'post':''}"><header>
+        <span class="who">${d.models[e.m]}</span>
+        <span class="meta">${C.labels[e.m]||''} · ${e.kind==='public'?'post':'private'}</span>
+        <span class="st" title="Stance: −5 = option A, +5 = option B">${e.st==null?'':`<i style="background:${divC(e.st)}"></i>`}${fmt(e.st)}</span></header>
+        <div class="body">${textHTML(e.t)}</div>${cotHTML(e,q)}</article>`).join('')}</div></section>`;}).join('');
+}
+
+
+function render(){tokens();renderTop();renderFeed();try{localStorage.setItem('tx2',JSON.stringify({d:S.d,c:S.c}));}catch(e){}}
+
+document.addEventListener('click',ev=>{
+  const b=ev.target.closest('button');if(!b)return;
+  if(b.dataset.ph){const s=$(b.dataset.ph);if(s)s.scrollIntoView({behavior:matchMedia('(prefers-reduced-motion: reduce)').matches?'auto':'smooth'});return;}
+  if(b.dataset.d!=null){S.d=+b.dataset.d;S.m=null;render();}
+  else if(b.dataset.c){S.c=b.dataset.c;render();}
+  else if(b.dataset.k){S.k=b.dataset.k;render();}
+  else if(b.dataset.m!=null){const m=+b.dataset.m;S.m=(b.classList.contains('chip')&&S.m===m)?null:m;render();
+    if(b.classList.contains('ref'))window.scrollTo({top:0,behavior:'smooth'});}
+});
+$('dil').addEventListener('toggle',()=>{$('dil').querySelector('.tog').textContent=$('dil').open?'Hide dilemma':'Read the dilemma';});
+let t;$('q').addEventListener('input',e=>{clearTimeout(t);t=setTimeout(()=>{S.q=e.target.value;renderFeed();},150);});
+
+const P=DATA.prompts;
+$('prompts').innerHTML=[['System prompt, private answers','SYS_PRIVATE'],['User prompt, round 0','ROUND0'],['User prompt, rounds 1–3 (private)','PRIVATE'],
+  ['System prompt, forum posts','SYS_PUBLIC'],['User prompt, forum posts','PUBLIC']]
+  .map(([h,k])=>`<div class="pr"><h3>${h} · ${k}</h3><pre>${esc(P[k])}</pre></div>`).join('')+
+  '<p class="hint">Control agents get the same private prompts with no forum section. Forum agents see all posts so far, in each round’s shared random order.</p>';
+matchMedia('(prefers-color-scheme: dark)').addEventListener('change',render);
+new MutationObserver(render).observe(document.documentElement,{attributes:true,attributeFilter:['data-theme']});
+render();
+</script>
